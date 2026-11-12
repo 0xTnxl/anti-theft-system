@@ -1,0 +1,8 @@
+.pio/
+.vscode/
+# Pairing key and MAC addresses. Never commit.
+include/secrets.h
+/docs/
+anti-theft-1.png
+anti-theft-2.png
+
