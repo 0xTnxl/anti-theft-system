@@ -28,7 +28,7 @@ constexpr uint32_t REED_DEBOUNCE_MS = 50;
 
 // ---- Intrusion input: SW-420 DO and PIR OUT tied together on GPIO32 -------
 constexpr uint8_t PIN_INTRUSION = 32;
-constexpr int INTRUSION_ACTIVE_LEVEL = HIGH;   // TBC (Q7): measure with interior_diag
+constexpr int INTRUSION_ACTIVE_LEVEL = HIGH;   // TBC (Q7): measure with interior_selftest ("intrusion")
 constexpr uint32_t INTRUSION_WINDOW_MS = 2000;
 constexpr uint32_t INTRUSION_EDGE_MIN_GAP_MS = 30;  // one knock = one event
 constexpr uint32_t INTRUSION_HOLD_MS = 1000;        // PIR gives one long pulse

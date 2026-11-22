@@ -330,6 +330,9 @@ void updateAlarmInputs(uint32_t now) {
     }
 }
 
+constexpr uint8_t PIN_ONBOARD_LED = 2;   // DevKit V1 blue LED, not used on Rev B
+uint32_t gIdentifyUntil = 0;
+
 void updateOutputs(uint32_t now) {
     // Buzzer: siren overrides feedback beeps.
     if (gAlarm != proto::ALARM_NONE && !elapsed(now, gAlarmSince, ALARM_SIREN_MS)) {
@@ -351,6 +354,11 @@ void updateOutputs(uint32_t now) {
     else if (gLock == proto::LOCK_FAULT) led = (now / 500) & 1;
     else if (gArmedPrev) led = now % 3000 < 60;   // short flash: armed
     else led = false;
+
+    // "identify": fast blink on the red LED and the DevKit's onboard LED (GPIO2).
+    const bool ident = (int32_t)(gIdentifyUntil - now) > 0;
+    if (ident) led = (now / 100) & 1;
+    digitalWrite(PIN_ONBOARD_LED, ident && led);
     digitalWrite(PIN_LED_RED, led);
 }
 
@@ -564,11 +572,15 @@ void runCommand(char* cmd, uint32_t now) {
     if (arg) *arg++ = 0;
 
     if (!strcmp(cmd, "help")) {
-        Serial.println("status | enroll | cancel | list | delete <slot> | wipe yes");
+        Serial.println("status | enroll | cancel | list | delete <slot> | wipe yes | identify [s]");
         if (CONSOLE_TEST_COMMANDS)
             Serial.println("test: lock | unlock | arm | disarm | clear | resetlockout");
     } else if (!strcmp(cmd, "status")) {
         printStatus(now);
+    } else if (!strcmp(cmd, "identify")) {
+        const int s = arg ? constrain(atoi(arg), 1, 300) : 30;
+        gIdentifyUntil = now + (uint32_t)s * 1000;
+        Serial.printf("[int] INTERIOR board: blinking the onboard blue LED for %d s\n", s);
     } else if (!strcmp(cmd, "enroll")) {
         endEnroll();
         gEnrollMode = true;
@@ -648,6 +660,8 @@ void setup() {
     pinMode(PIN_SERVO, OUTPUT);
     digitalWrite(PIN_SERVO, LOW);
     pinMode(PIN_LED_RED, OUTPUT);
+    pinMode(PIN_ONBOARD_LED, OUTPUT);
+    digitalWrite(PIN_ONBOARD_LED, LOW);
 
     Serial.begin(115200);
     delay(50);

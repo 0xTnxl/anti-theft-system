@@ -6,7 +6,7 @@ Both boards must be flashed with the SAME secrets.h. Regenerating it un-pairs
 any boards already flashed, so the script refuses to overwrite without --force.
 
 MAC addresses are random, locally administered unicast addresses. The firmware
-sets them as the ESP32 base MAC at boot, so the real factory MACs do not need
+sets them as the WiFi STA MAC at boot, so the real factory MACs do not need
 to be read off the boards.
 """
 import argparse

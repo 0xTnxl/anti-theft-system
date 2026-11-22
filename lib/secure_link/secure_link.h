@@ -30,7 +30,11 @@ constexpr size_t TAG_LEN = 16;
 constexpr size_t MAX_PAYLOAD = 64;
 constexpr size_t MAX_FRAME = HDR_LEN + MAX_PAYLOAD + TAG_LEN;   // 96, under ESP-NOW's 250
 
-constexpr uint32_t REKEY_INTERVAL_MS = 10UL * 60 * 1000;      // exterior starts a rekey
+#ifndef SLINK_REKEY_INTERVAL_MS
+#define SLINK_REKEY_INTERVAL_MS (10UL * 60 * 1000)
+#endif
+// Exterior starts a rekey after this long. env:exterior_test shortens it to 60 s.
+constexpr uint32_t REKEY_INTERVAL_MS = SLINK_REKEY_INTERVAL_MS;
 constexpr uint32_t MAX_SESSION_AGE_MS = 20UL * 60 * 1000;     // hard limit, both sides
 constexpr uint64_t MAX_FRAMES_PER_SESSION = 1ULL << 20;
 constexpr uint32_t PREV_SESSION_GRACE_MS = 5000;              // old session still accepted on rx

@@ -72,6 +72,12 @@ uint32_t gLockoutUntil = 0;
 
 uint32_t gLastActivityMs = 0;
 
+// Console + "identify" (slow blink on the red LED and the DevKit's onboard LED).
+constexpr uint8_t PIN_ONBOARD_LED = 2;   // DevKit V1 blue LED, not used on Rev B
+char gTestLine[48];
+uint8_t gTestLen = 0;
+uint32_t gIdentifyUntil = 0;
+
 void rng(uint8_t* b, size_t n) { esp_fill_random(b, n); }
 
 void wipeCredentials() {
@@ -188,6 +194,12 @@ void updateLeds(uint32_t now) {
         case Ui::CardWait: break;
     }
     if (gStatus.alarm != proto::ALARM_NONE && gUi != Ui::Result) r = blinkFast;
+    const bool ident = (int32_t)(gIdentifyUntil - now) > 0;
+    if (ident) {
+        g = y = false;
+        r = blinkSlow;
+    }
+    digitalWrite(PIN_ONBOARD_LED, ident && blinkSlow);
     digitalWrite(PIN_LED_GREEN, g);
     digitalWrite(PIN_LED_YELLOW, y);
     digitalWrite(PIN_LED_RED, r);
@@ -219,8 +231,16 @@ void sendHeartbeat(uint32_t now) {
     gLastHbMs = now;
 }
 
+const char* codeName(uint8_t c) {
+    static const char* names[] = {"?",    "GRANTED",      "DENIED",    "LOCKED_OUT", "FAULT",
+                                  "BUSY", "ENROLL_AGAIN", "ENROLL_OK", "ENROLL_FAIL"};
+    return c < 9 ? names[c] : "?";
+}
+
 void onAuthResult(const proto::AuthResult& r, uint32_t now) {
     if (gUi != Ui::Verifying || r.reqId != gReqId) return;
+    Serial.printf("[auth] result %s attempts_left=%u lockout=%us\n", codeName(r.code),
+                  r.attemptsLeft, r.lockoutS);
     char buf[22];
     switch (r.code) {
         case proto::AUTH_GRANTED:
@@ -408,6 +428,86 @@ void handleKeys(uint32_t now) {
     }
 }
 
+#ifdef ATDS_TEST_HOOKS
+// TEST BUILD ONLY (env:exterior_test). "auth <uid hex> <pin>" over USB serial
+// stands in for the RC522 and keypad so tools/link_test.py can drive the whole
+// link without peripherals. Never ship a board with this build.
+
+bool parseUid(const char* s, uint8_t* out, uint8_t& len) {
+    const size_t n = strlen(s);
+    if (n % 2 || n / 2 > proto::UID_MAX || n == 0) return false;
+    for (size_t i = 0; i < n / 2; i++) {
+        char b[3] = {s[2 * i], s[2 * i + 1], 0};
+        char* end;
+        out[i] = (uint8_t)strtoul(b, &end, 16);
+        if (*end) return false;
+    }
+    len = (uint8_t)(n / 2);
+    return true;
+}
+
+void testCommand(char* line, uint32_t now) {
+    char* cmd = strtok(line, " ");
+    char* uid = strtok(nullptr, " ");
+    char* pin = strtok(nullptr, " ");
+    if (!cmd || strcmp(cmd, "auth") != 0 || !uid || !pin) {
+        Serial.println("[test] usage: auth <uid hex> <pin digits>");
+        return;
+    }
+    const size_t pinLen = strlen(pin);
+    bool digits = pinLen >= 1 && pinLen <= proto::PIN_MAX;   // short PINs allowed: interior must reject
+    for (size_t i = 0; digits && i < pinLen; i++) digits = pin[i] >= '0' && pin[i] <= '9';
+    uint8_t u[proto::UID_MAX];
+    uint8_t uLen = 0;
+    if (!digits || !parseUid(uid, u, uLen)) {
+        Serial.println("[test] bad uid or pin");
+        return;
+    }
+    // Lockout is allowed on purpose: the interior must refuse even if the exterior UI is bypassed.
+    if (!linkUp(now) || !(gUi == Ui::CardWait || gUi == Ui::Lockout)) {
+        Serial.println("[test] not ready");
+        return;
+    }
+    memcpy(gUid, u, uLen);
+    gUidLen = uLen;
+    memcpy(gPin, pin, pinLen);
+    gPinLen = (uint8_t)pinLen;
+    mbedtls_platform_zeroize(u, sizeof(u));
+    Serial.println("[test] auth sent");
+    submitPin(now);
+}
+
+#endif
+
+// USB serial console. Production: only "identify". Test build: also "auth".
+void consoleCommand(char* line, uint32_t now) {
+    if (!strncmp(line, "identify", 8) && (line[8] == 0 || line[8] == ' ')) {
+        const int s = line[8] ? constrain(atoi(line + 9), 1, 300) : 30;
+        gIdentifyUntil = now + (uint32_t)s * 1000;
+        Serial.printf("[ext] EXTERIOR board: slow blink, red LED + onboard blue LED, for %d s\n", s);
+        return;
+    }
+#ifdef ATDS_TEST_HOOKS
+    testCommand(line, now);
+#else
+    Serial.println("[ext] commands: identify [seconds]");
+#endif
+}
+
+void serviceConsole(uint32_t now) {
+    while (Serial.available()) {
+        const char c = (char)Serial.read();
+        if (c == '\r' || c == '\n') {
+            if (!gTestLen) continue;
+            gTestLine[gTestLen] = 0;
+            gTestLen = 0;
+            consoleCommand(gTestLine, now);
+        } else if (gTestLen < sizeof(gTestLine) - 1) {
+            gTestLine[gTestLen++] = c;
+        }
+    }
+}
+
 }  // namespace
 
 void setup() {
@@ -415,10 +515,16 @@ void setup() {
     Serial.begin(115200);
     delay(50);
     Serial.println("\n[ext] anti-theft exterior module, Rev B wiring");
+#ifdef ATDS_TEST_HOOKS
+    Serial.printf("[ext] TEST BUILD: serial auth hook on, rekey every %lu s. Do not ship.\n",
+                  (unsigned long)(slink::REKEY_INTERVAL_MS / 1000));
+#endif
 
     pinMode(PIN_LED_GREEN, OUTPUT);
     pinMode(PIN_LED_YELLOW, OUTPUT);
     pinMode(PIN_LED_RED, OUTPUT);
+    pinMode(PIN_ONBOARD_LED, OUTPUT);
+    digitalWrite(PIN_ONBOARD_LED, LOW);
     digitalWrite(PIN_LED_YELLOW, HIGH);
 
     gKeypad.end();   // all keypad pins high-impedance until the PIN phase
@@ -438,6 +544,7 @@ void setup() {
 void loop() {
     const uint32_t now = millis();
     serviceLink(now);
+    serviceConsole(now);
     const bool up = linkUp(now);
 
     switch (gUi) {
@@ -456,8 +563,10 @@ void loop() {
             handleKeys(now);
             break;
         case Ui::Verifying:
-            if (now - gVerifyStartMs > VERIFY_TIMEOUT_MS)
+            if (now - gVerifyStartMs > VERIFY_TIMEOUT_MS) {
+                Serial.println("[auth] result TIMEOUT attempts_left=0 lockout=0s");
                 showResult("NO RESPONSE", "TIMEOUT", Tone::Fail, RESULT_FAIL_MS, now);
+            }
             break;
         case Ui::Result:
             if ((int32_t)(now - gResultUntil) >= 0) setUi(up ? Ui::CardWait : Ui::Linking, now);

@@ -35,19 +35,23 @@ bool begin(const uint8_t myMac[6], const uint8_t peerMac[6], uint8_t channel, in
     gQueue = xQueueCreate(8, sizeof(Packet));
     if (!gQueue) return false;
 
-    if (esp_base_mac_addr_set(myMac) != ESP_OK) {
-        Serial.println("[espnow] esp_base_mac_addr_set failed");
-        return false;
-    }
+    // Arduino-ESP32 2.x resets the base MAC to the factory value inside
+    // WiFi.mode() (tcpipInit), so esp_base_mac_addr_set() does not stick.
+    // Set the STA interface MAC directly once WiFi is running instead.
     WiFi.mode(WIFI_STA);
     WiFi.disconnect();
+    const esp_err_t sm = esp_wifi_set_mac(WIFI_IF_STA, myMac);
 
-    uint8_t actual[6];
+    uint8_t actual[6] = {};
     esp_wifi_get_mac(WIFI_IF_STA, actual);
-    if (memcmp(actual, myMac, 6) != 0) {
-        Serial.println("[espnow] STA MAC does not match secrets.h");
+    if (sm != ESP_OK || memcmp(actual, myMac, 6) != 0) {
+        Serial.printf("[espnow] could not set STA MAC from secrets.h (err 0x%x), have "
+                      "%02x:%02x:%02x:%02x:%02x:%02x\n",
+                      sm, actual[0], actual[1], actual[2], actual[3], actual[4], actual[5]);
         return false;
     }
+    Serial.printf("[espnow] STA MAC %02x:%02x:%02x:%02x:%02x:%02x, channel %u\n", actual[0],
+                  actual[1], actual[2], actual[3], actual[4], actual[5], channel);
 
     esp_wifi_set_promiscuous(true);
     esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);

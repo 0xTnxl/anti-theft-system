@@ -10,10 +10,9 @@ public:
     bool active() const { return active_; }
     // Call often. Returns a key once per press (debounced), or 0.
     char poll(uint32_t nowMs);
+    char scan();   // raw, undebounced: first key found held, or 0
 
 private:
-    char scan();
-
     bool active_ = false;
     uint32_t lastScanMs_ = 0;
     char candidate_ = 0;
