@@ -1,21 +1,38 @@
-// Interior module (servo bolt, sensors, buzzer). Hardware Rev B, wiring unchanged.
-// Defaults that still need team confirmation are marked TBC (docs/OPEN_QUESTIONS.md).
+// Interior module (bolt motor, sensors, buzzer).
+// Wiring: "Proposed updated wiring list" (L298N channel A + JGB37-520 geared
+// motor with encoder, PIR on its own pin, no potentiometer). The exterior is
+// unchanged (Rev B). Defaults that still need team confirmation are marked TBC
+// (docs/OPEN_QUESTIONS.md).
 #pragma once
 #include <stdint.h>
 #include <Arduino.h>
 
-// ---- Bolt servo (S3003) ---------------------------------------------------
-// TBC (Q1): servo is not on the Rev B drawing. Assumed signal on GPIO18
-// (the old L293D 1A line), powered from the 5 V rail.
-constexpr uint8_t PIN_SERVO = 18;
-constexpr uint8_t PIN_L293D_EN = 23;    // held LOW so the L293D stays off
-constexpr uint8_t PIN_L293D_IN2 = 19;   // held LOW
-constexpr uint8_t SERVO_LEDC_CH = 0;    // LEDC timer 0
-constexpr uint16_t SERVO_LOCK_US = 1000;     // TBC (Q3)
-constexpr uint16_t SERVO_UNLOCK_US = 2000;   // TBC (Q3)
-constexpr uint32_t SERVO_MOVE_TIMEOUT_MS = 1500;
-constexpr uint32_t SERVO_SETTLE_MS = 150;    // keep driving after the switch closes
-constexpr uint32_t SERVO_RETRY_BACKOFF_MS = 400;
+// ---- Bolt motor: L298N channel A ------------------------------------------
+// The L298N ENA jumper must be REMOVED: with it fitted, ENA is tied to the
+// board's 5 V and would be shorted against GPIO23.
+constexpr uint8_t PIN_MOTOR_IN1 = 18;
+constexpr uint8_t PIN_MOTOR_IN2 = 19;
+constexpr uint8_t PIN_MOTOR_ENA = 23;     // PWM
+constexpr uint8_t MOTOR_LEDC_CH = 0;      // LEDC timer 0
+constexpr uint32_t MOTOR_PWM_HZ = 1000;   // the L298N switches slowly; keep this low
+constexpr uint8_t MOTOR_DUTY_PCT = 100;   // drive strength while moving
+// TBC (Q1): which way is "unlock" depends on how M1/M2 and the bolt are fitted.
+// false: unlock = IN1 HIGH, IN2 LOW.  true: swapped.
+constexpr bool MOTOR_INVERT = false;
+constexpr uint32_t MOTOR_MOVE_TIMEOUT_MS = 3000;   // TBC (Q2): measure with the kick test
+constexpr uint32_t MOTOR_BRAKE_MS = 100;           // short brake, then coast
+constexpr uint32_t MOTOR_RETRY_BACKOFF_MS = 300;
+
+// ---- Motor encoder (C1, C2) -----------------------------------------------
+// GPIO35 is input only with no internal pull resistors. If the encoder outputs
+// are open collector, fit external pull-ups to 3V3 (Q3). Never feed 5 V in.
+constexpr uint8_t PIN_ENC_A = 33;   // C1
+constexpr uint8_t PIN_ENC_B = 35;   // C2
+// Stop and report FAULT when the encoder shows no movement while driving.
+// Set to false if the encoder is not connected yet (timeout still applies).
+constexpr bool ENCODER_STALL_DETECT = true;
+constexpr uint32_t ENCODER_STARTUP_MS = 250;   // motor spin-up before stall checks
+constexpr uint32_t ENCODER_STALL_MS = 250;     // no count for this long = stalled
 
 // ---- Limit and reed switches (INPUT_PULLUP, close to GND) -----------------
 constexpr uint8_t PIN_SW_LOCKED = 26;     // TBC (Q5): SW1 = bolt locked
@@ -26,24 +43,25 @@ constexpr int DOOR_CLOSED_LEVEL = LOW;    // TBC (Q6)
 constexpr uint32_t SWITCH_DEBOUNCE_MS = 20;
 constexpr uint32_t REED_DEBOUNCE_MS = 50;
 
-// ---- Intrusion input: SW-420 DO and PIR OUT tied together on GPIO32 -------
-constexpr uint8_t PIN_INTRUSION = 32;
-constexpr int INTRUSION_ACTIVE_LEVEL = HIGH;   // TBC (Q7): measure with interior_selftest ("intrusion")
-constexpr uint32_t INTRUSION_WINDOW_MS = 2000;
-constexpr uint32_t INTRUSION_EDGE_MIN_GAP_MS = 30;  // one knock = one event
-constexpr uint32_t INTRUSION_HOLD_MS = 1000;        // PIR gives one long pulse
-constexpr uint32_t PIR_WARMUP_MS = 60000;
-constexpr uint32_t ARM_DELAY_MS = 10000;            // intrusion ignored right after locking
+// ---- Vibration: SW-420 DO on GPIO32 ---------------------------------------
+constexpr uint8_t PIN_VIBRATION = 32;
+constexpr int VIBRATION_ACTIVE_LEVEL = HIGH;   // TBC (Q7): check with the kick test
+constexpr uint8_t VIBRATION_EVENTS = 3;        // knocks within the window that trip (Q11)
+constexpr uint32_t VIBRATION_WINDOW_MS = 2000;
+constexpr uint32_t VIBRATION_EDGE_MIN_GAP_MS = 30;   // one knock = one event
 
-// ---- Potentiometer: intrusion sensitivity (Q11) ---------------------------
-constexpr uint8_t PIN_POT = 34;
-constexpr uint8_t SENSITIVITY_MIN_EVENTS = 1;    // pot at max -> 1 event trips
-constexpr uint8_t SENSITIVITY_MAX_EVENTS = 10;   // pot at min -> 10 events
+// ---- Motion: HC-SR501 OUT on GPIO34 (input only, no internal pulls) -------
+constexpr uint8_t PIN_PIR = 34;
+constexpr int PIR_ACTIVE_LEVEL = HIGH;         // HC-SR501 drives its output high on motion
+constexpr uint32_t PIR_HOLD_MS = 500;          // ignore glitches shorter than this
+constexpr uint32_t PIR_WARMUP_MS = 60000;
+constexpr uint32_t ARM_DELAY_MS = 10000;       // sensors ignored right after locking
 
 // ---- Buzzer and LED -------------------------------------------------------
 constexpr uint8_t PIN_BUZZER = 14;
-constexpr uint8_t BUZZER_LEDC_CH = 2;   // LEDC timer 1 (separate from servo)
+constexpr uint8_t BUZZER_LEDC_CH = 2;   // LEDC timer 1 (separate from the motor PWM)
 constexpr uint8_t PIN_LED_RED = 4;
+constexpr uint8_t PIN_ONBOARD_LED = 2;  // DevKit V1 blue LED, unused, for "identify"
 
 // ---- Auto-relock (Q18) ----------------------------------------------------
 constexpr uint32_t RELOCK_IF_NOT_OPENED_MS = 10000;

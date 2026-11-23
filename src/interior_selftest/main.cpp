@@ -1,25 +1,29 @@
 // Interior component kick test (env:interior_selftest). See docs/TESTING.md.
-// Replaces the old interior_diag build; its live monitor and servo commands are kept.
+// Wiring: proposed updated list (L298N channel A, JGB37-520 motor + encoder,
+// SW-420 on GPIO32, PIR on GPIO34, no potentiometer).
 //
-// At boot it runs the automatic checks, which never move the servo: radio, LED,
-// buzzer, switch states, potentiometer, GPIO32 idle level. Then type:
-//   switches    press SW1, SW2, then open/close the door (reed)
-//   pot         turn the potentiometer end to end
-//   intrusion   trigger the SW-420, then the PIR, one at a time (answers Q7)
-//   servo yes   MOVES THE BOLT: unlock, then lock, timed against the limit switches
-//   s <us>      hold the servo at a pulse width (calibration, Q3)    r  release servo
-//   b           beep           monitor   live view of every input (any key stops)
-//   auto | all (auto + switches + pot + intrusion) | summary | help
+// At boot it runs the automatic checks, which never move the motor: radio, LED,
+// buzzer, switch states, encoder idle lines, SW-420 and PIR idle levels. Then type:
+//   switches     press SW1, SW2, then open/close the door (reed)
+//   encoder      turn the motor shaft by hand: counts must change
+//   vibration    tap the SW-420           motion   wave at the PIR
+//   jog u <ms>   MOVES THE MOTOR towards unlock for <ms> (max 1000), stops at the switch
+//   jog l <ms>   same towards lock
+//   motor yes    MOVES THE BOLT: unlock, then lock, timed against the limit switches
+//   b  beep      monitor  live view of every input (any key stops)
+//   auto | all (auto + switches + encoder + vibration + motion) | summary | help
 // Any input stops an interactive test early.
 #include <Arduino.h>
 
 #include "config_interior.h"
+#include "motor.h"
 #include "selftest_report.h"
 
 namespace {
 
-volatile uint32_t gEdges = 0;
-void IRAM_ATTR onEdge() { gEdges = gEdges + 1; }
+volatile uint32_t gVibEdges = 0, gPirEdges = 0;
+void IRAM_ATTR onVib() { gVibEdges = gVibEdges + 1; }
+void IRAM_ATTR onPir() { gPirEdges = gPirEdges + 1; }
 
 bool pressed(uint8_t pin) { return digitalRead(pin) == SWITCH_PRESSED_LEVEL; }
 const char* lvl(int v) { return v ? "HIGH" : "LOW"; }
@@ -30,16 +34,10 @@ void beepHz(uint16_t hz, uint16_t ms) {
     ledcWriteTone(BUZZER_LEDC_CH, 0);
 }
 
-void servoUs(uint16_t us) {
-    ledcAttachPin(PIN_SERVO, SERVO_LEDC_CH);
-    ledcWrite(SERVO_LEDC_CH, (uint32_t)us * 65536UL / 20000UL);
-}
-
-void servoRelease() {
-    ledcWrite(SERVO_LEDC_CH, 0);
-    ledcDetachPin(PIN_SERVO);
-    pinMode(PIN_SERVO, OUTPUT);
-    digitalWrite(PIN_SERVO, LOW);
+void stopMotor() {
+    motor::brake();
+    delay(MOTOR_BRAKE_MS);
+    motor::coast();
 }
 
 // ------------------------------------------------------------ automatic ---
@@ -47,11 +45,13 @@ void servoRelease() {
 void testLed() {
     for (int i = 0; i < 3; i++) {
         digitalWrite(PIN_LED_RED, HIGH);
+        digitalWrite(PIN_ONBOARD_LED, HIGH);
         delay(250);
         digitalWrite(PIN_LED_RED, LOW);
+        digitalWrite(PIN_ONBOARD_LED, LOW);
         delay(250);
     }
-    st::record("red LED", st::CHECK, "LED on GPIO4 should have blinked 3 times");
+    st::record("red LED", st::CHECK, "LED on GPIO4 (and the onboard blue LED) should have blinked 3 times");
 }
 
 void testBuzzer() {
@@ -76,49 +76,59 @@ void testSwitchesIdle() {
                closed ? "closed" : "open", lvl(digitalRead(PIN_REED)));
 }
 
-void testPotIdle() {
-    int mn = 4095, mx = 0;
-    long sum = 0;
-    for (int i = 0; i < 64; i++) {
-        const int v = analogRead(PIN_POT);
-        mn = min(mn, v);
-        mx = max(mx, v);
-        sum += v;
-        delay(2);
-    }
-    const int mean = (int)(sum / 64);
-    if (mx - mn > 300)
-        st::record("potentiometer (idle)", st::WARN, "readings jump %d..%d: GPIO34 is probably floating (pot not connected?)", mn, mx);
-    else
-        st::record("potentiometer (idle)", st::CHECK, "steady at %d of 4095 (spread %d). A floating pin can also read steady: run 'pot'", mean, mx - mn);
-}
-
-void testIntrusionIdle() {
-    const uint32_t e0 = gEdges;
+// Samples a pin for 2 s. Returns edges seen; sets idle to HIGH/LOW or -1 if mixed.
+uint32_t sampleIdle(uint8_t pin, volatile uint32_t& edges, int& idle, int& highPct) {
+    const uint32_t e0 = edges;
     int highs = 0;
     for (int i = 0; i < 200; i++) {
-        highs += digitalRead(PIN_INTRUSION);
+        highs += digitalRead(pin);
         delay(10);
     }
-    const uint32_t edges = gEdges - e0;
+    highPct = highs / 2;
+    idle = highs > 190 ? HIGH : highs < 10 ? LOW : -1;
+    return edges - e0;
+}
+
+void testVibrationIdle() {
+    int idle, pct;
+    const uint32_t e = sampleIdle(PIN_VIBRATION, gVibEdges, idle, pct);
+    if (e > 20 || idle < 0)
+        st::record("SW-420 (idle)", st::WARN, "GPIO32 toggling (%lu edges, HIGH %d%% of 2 s) while still: floating, or sensitivity screw too high", (unsigned long)e, pct);
+    else if (idle == VIBRATION_ACTIVE_LEVEL)
+        st::record("SW-420 (idle)", st::WARN, "GPIO32 idles %s, which is the configured ACTIVE level: sensor triggered, floating, or VIBRATION_ACTIVE_LEVEL wrong (Q7)", lvl(idle));
+    else
+        st::record("SW-420 (idle)", st::CHECK, "GPIO32 quiet at %s. Run 'vibration'", lvl(idle));
+}
+
+void testPirIdle() {
+    int idle, pct;
+    const uint32_t e = sampleIdle(PIN_PIR, gPirEdges, idle, pct);
     const char* warm = millis() < PIR_WARMUP_MS ? " (PIR still in its 60 s warm-up)" : "";
-    const int idle = highs > 190 ? HIGH : highs < 10 ? LOW : -1;
-    if (edges > 20 || idle < 0) {
-        st::record("GPIO32 SW-420 + PIR (idle)", st::WARN, "line toggling (%lu edges, HIGH %d%% of 2 s) with nothing happening: floating or a sensor firing%s",
-                   (unsigned long)edges, highs / 2, warm);
-    } else if (idle == INTRUSION_ACTIVE_LEVEL) {
-        st::record("GPIO32 SW-420 + PIR (idle)", st::WARN, "idle level is %s, which is the configured ACTIVE level: a sensor is on, the line floats, or INTRUSION_ACTIVE_LEVEL is wrong (Q7)%s",
-                   lvl(idle), warm);
-    } else {
-        st::record("GPIO32 SW-420 + PIR (idle)", st::CHECK, "quiet at %s, %lu edges in 2 s. Run 'intrusion' to trigger each sensor%s",
-                   lvl(idle), (unsigned long)edges, warm);
-    }
+    if (e > 20 || idle < 0)
+        st::record("PIR (idle)", st::WARN, "GPIO34 toggling (%lu edges, HIGH %d%%): floating (GPIO34 has no pull resistor) or motion in view%s", (unsigned long)e, pct, warm);
+    else if (idle == PIR_ACTIVE_LEVEL)
+        st::record("PIR (idle)", st::WARN, "GPIO34 held %s (active): motion in view, re-trigger mode, or still warming up%s", lvl(idle), warm);
+    else
+        st::record("PIR (idle)", st::CHECK, "GPIO34 quiet at %s. Run 'motion'%s", lvl(idle), warm);
+}
+
+void testEncoderIdle() {
+    const int32_t c0 = motor::count();
+    const uint32_t b0 = motor::badTransitions();
+    delay(500);
+    const int32_t moved = motor::count() - c0;
+    const uint32_t bad = motor::badTransitions() - b0;
+    const int a = digitalRead(PIN_ENC_A), b = digitalRead(PIN_ENC_B);
+    if (moved || bad)
+        st::record("encoder (idle)", st::WARN, "counts change with the motor off (%ld counts, %lu bad steps): floating C1/C2 or noise. Open-collector outputs need pull-ups to 3V3 (Q3)",
+                   (long)moved, (unsigned long)bad);
+    else
+        st::record("encoder (idle)", st::CHECK, "steady, C1 (GPIO33) %s, C2 (GPIO35) %s. A disconnected encoder looks the same: run 'encoder'", lvl(a), lvl(b));
 }
 
 // ---------------------------------------------------------- interactive ---
 
 // Waits until `pin` changes level and changes back (20 ms debounce).
-// Returns the transitions seen (0..2); flags any change on `other` meanwhile.
 int watchToggle(uint8_t pin, uint32_t ms, int other, bool& otherMoved) {
     int stable = digitalRead(pin), cand = stable, trans = 0;
     const int other0 = other >= 0 ? digitalRead(other) : 0;
@@ -162,183 +172,217 @@ void testSwitches() {
     const int closedLevel = digitalRead(PIN_REED);
     bool unused = false;
     const int t = watchToggle(PIN_REED, 20000, -1, unused);
-    if (t != 2) {
+    if (t != 2)
         st::record("reed switch (door)", st::FAIL, "GPIO27 %s: check reed to GND and GPIO27, and the magnet gap",
                    t ? "changed but never came back" : "never changed");
-    } else if (closedLevel != DOOR_CLOSED_LEVEL) {
+    else if (closedLevel != DOOR_CLOSED_LEVEL)
         st::record("reed switch (door)", st::WARN, "works, but door closed reads %s while DOOR_CLOSED_LEVEL is %s (Q6)",
                    lvl(closedLevel), lvl(DOOR_CLOSED_LEVEL));
-    } else {
+    else
         st::record("reed switch (door)", st::PASS, "opens and closes; door closed reads %s as configured", lvl(closedLevel));
-    }
 }
 
-void testPot() {
-    Serial.println("\n>> Turn the potentiometer fully one way, then fully the other way (20 s)");
-    int mn = 4095, mx = 0, last = -1000;
+void testEncoder() {
+    Serial.println("\n>> Motor is OFF. Turn the motor output shaft (or the bolt) by hand, both ways (15 s)");
+    const int32_t c0 = motor::count();
+    const uint32_t b0 = motor::badTransitions();
+    int32_t mn = 0, mx = 0, last = 0;
     const uint32_t t0 = millis();
-    while (millis() - t0 < 20000 && !(mn < 200 && mx > 3900)) {
-        const int v = analogRead(PIN_POT);
-        mn = min(mn, v);
-        mx = max(mx, v);
-        if (abs(v - last) > 150) {
-            Serial.printf("  %4d   (min %d, max %d)\n", v, mn, mx);
-            last = v;
+    while (millis() - t0 < 15000) {
+        const int32_t d = motor::count() - c0;
+        mn = min(mn, d);
+        mx = max(mx, d);
+        if (abs(d - last) >= 20) {
+            Serial.printf("  count %ld\n", (long)d);
+            last = d;
         }
+        if (mx >= 50 && mn <= -50) break;
         if (st::abortRequested()) break;
-        delay(20);
+        delay(10);
     }
-    if (mn < 300 && mx > 3800)
-        st::record("potentiometer (range)", st::PASS, "full range %d..%d", mn, mx);
-    else if (mx - mn < 200)
-        st::record("potentiometer (range)", st::FAIL, "reading stuck around %d: check pot VCC 3V3, GND and wiper to GPIO34", (mn + mx) / 2);
+    const uint32_t bad = motor::badTransitions() - b0;
+    if (mx >= 50 && mn <= -50)
+        st::record("encoder (by hand)", bad > 10 ? st::WARN : st::PASS, "counts went %ld..%ld, both directions decoded%s",
+                   (long)mn, (long)mx, bad > 10 ? ", but with invalid steps: noise or missing pull-ups" : "");
+    else if (mx || mn)
+        st::record("encoder (by hand)", st::WARN, "counts only %ld..%ld: one direction only means one channel (C1 GPIO33 or C2 GPIO35) is dead", (long)mn, (long)mx);
     else
-        st::record("potentiometer (range)", st::WARN, "only %d..%d: turn it all the way, or check the pot's end connections", mn, mx);
+        st::record("encoder (by hand)", st::FAIL, "no counts: check encoder VCC/GND, C1 to GPIO33, C2 to GPIO35, pull-ups if open collector (Q3)");
 }
 
-struct Activity {
-    uint32_t edges;
-    uint32_t longestActiveMs;
-    int idle;
-};
-
-Activity watchIntrusion(uint32_t ms) {
-    Activity a = {0, 0, digitalRead(PIN_INTRUSION)};
-    const uint32_t e0 = gEdges, t0 = millis();
-    uint32_t activeSince = 0, seenEdges = 0;
-    bool active = false;
-    while (millis() - t0 < ms) {
-        const bool now = digitalRead(PIN_INTRUSION) != a.idle;
-        if (now && !active) activeSince = millis();
-        if (!now && active) a.longestActiveMs = max<uint32_t>(a.longestActiveMs, millis() - activeSince);
-        active = now;
-        if (gEdges - e0 != seenEdges) {
-            seenEdges = gEdges - e0;
-            Serial.printf("  edge %lu, line %s\n", (unsigned long)seenEdges, lvl(digitalRead(PIN_INTRUSION)));
+void testVibration() {
+    Serial.println("\n>> Tap the SW-420 board a few times (15 s)");
+    const uint32_t e0 = gVibEdges, t0 = millis();
+    uint32_t seen = 0;
+    while (millis() - t0 < 15000 && gVibEdges - e0 < 6) {
+        if (gVibEdges - e0 != seen) {
+            seen = gVibEdges - e0;
+            Serial.printf("  edge %lu, line %s\n", (unsigned long)seen, lvl(digitalRead(PIN_VIBRATION)));
         }
         if (st::abortRequested()) break;
-        delay(2);
+        delay(5);
     }
-    if (active) a.longestActiveMs = max<uint32_t>(a.longestActiveMs, millis() - activeSince);
-    a.edges = gEdges - e0;
-    return a;
+    if (gVibEdges - e0 >= 2)
+        st::record("SW-420 vibration", st::PASS, "%lu edges from taps on GPIO32", (unsigned long)(gVibEdges - e0));
+    else
+        st::record("SW-420 vibration", st::FAIL, "no activity on GPIO32: check SW-420 VCC 3V3, GND, DO, and its sensitivity screw");
 }
 
-void testIntrusion() {
-    Serial.println("\n>> Cover the PIR (or face it at a wall). Tap the SW-420 board a few times (15 s)");
-    const Activity v = watchIntrusion(15000);
-    if (v.edges >= 2)
-        st::record("SW-420 vibration (GPIO32)", st::PASS, "%lu edges from taps; idle %s, active %s", (unsigned long)v.edges, lvl(v.idle), lvl(!v.idle));
-    else
-        st::record("SW-420 vibration (GPIO32)", st::FAIL, "no activity: SW-420 not wired, its sensitivity screw too low, or its output is held by the PIR (tied outputs, Q7)");
-
+void testMotion() {
     if (millis() < PIR_WARMUP_MS) {
         const uint32_t wait = PIR_WARMUP_MS - millis();
         Serial.printf("\n>> PIR warm-up: waiting %lu s. Keep still. Type anything to skip.\n", (unsigned long)(wait / 1000 + 1));
         const uint32_t t0 = millis();
         while (millis() - t0 < wait && !st::abortRequested()) delay(50);
     }
-    Serial.println("\n>> Keep the SW-420 still. Uncover the PIR and wave a hand in front of it (15 s)");
-    const Activity p = watchIntrusion(15000);
-    if (p.edges >= 1 && p.longestActiveMs >= 300)
-        st::record("PIR motion (GPIO32)", st::PASS, "pulse of %lu ms; idle %s, active %s", (unsigned long)p.longestActiveMs, lvl(p.idle), lvl(!p.idle));
-    else if (p.edges >= 1)
-        st::record("PIR motion (GPIO32)", st::WARN, "only short blips (%lu ms max): a PIR pulse is normally 1 s or more", (unsigned long)p.longestActiveMs);
+    Serial.println("\n>> Wave a hand in front of the PIR (15 s)");
+    const int idle = digitalRead(PIN_PIR);
+    uint32_t longest = 0, since = 0;
+    bool active = false;
+    const uint32_t t0 = millis();
+    while (millis() - t0 < 15000) {
+        const bool a = digitalRead(PIN_PIR) != idle;
+        if (a && !active) {
+            since = millis();
+            Serial.printf("  GPIO34 -> %s\n", lvl(!idle));
+        }
+        if (!a && active) longest = max<uint32_t>(longest, millis() - since);
+        active = a;
+        if (longest >= 500) break;
+        if (st::abortRequested()) break;
+        delay(5);
+    }
+    if (active) longest = max<uint32_t>(longest, millis() - since);
+    const int act = idle ? LOW : HIGH;
+    if (longest >= 300 && act == PIR_ACTIVE_LEVEL)
+        st::record("PIR motion", st::PASS, "pulse of %lu+ ms on GPIO34, active %s as configured", (unsigned long)longest, lvl(act));
+    else if (longest >= 300)
+        st::record("PIR motion", st::WARN, "pulse seen, but active %s while PIR_ACTIVE_LEVEL is %s", lvl(act), lvl(PIR_ACTIVE_LEVEL));
+    else if (longest)
+        st::record("PIR motion", st::WARN, "only short blips (%lu ms): a PIR pulse is normally 1 s or more", (unsigned long)longest);
     else
-        st::record("PIR motion (GPIO32)", st::FAIL, "no activity: PIR not powered from VIN (5 V), not wired, or held by the SW-420 output (Q7)");
-
-    const int idle = p.edges ? p.idle : v.idle;
-    const int active = idle ? LOW : HIGH;
-    if ((v.edges || p.edges) && active != INTRUSION_ACTIVE_LEVEL)
-        st::record("GPIO32 active level", st::WARN, "sensors drive the line %s, but INTRUSION_ACTIVE_LEVEL is %s: change it (Q7)", lvl(!idle), lvl(INTRUSION_ACTIVE_LEVEL));
-    else if (v.edges || p.edges)
-        st::record("GPIO32 active level", st::PASS, "sensors drive the line %s, matches INTRUSION_ACTIVE_LEVEL", lvl(!idle));
+        st::record("PIR motion", st::FAIL, "no activity on GPIO34: check PIR VCC (VIN), GND, OUT to GPIO34");
 }
 
-uint32_t driveUntil(uint16_t us, uint8_t pin, uint32_t timeoutMs) {
-    servoUs(us);
+struct Move {
+    uint32_t ms;       // 0 = switch not reached
+    int32_t counts;
+    bool stalled;
+};
+
+// Drives until `stopPin` is pressed, a stall, or the timeout. Always stops the motor.
+Move driveTo(motor::Dir d, uint8_t stopPin, uint32_t timeoutMs) {
+    Move m = {0, 0, false};
+    const int32_t c0 = motor::count();
+    if (pressed(stopPin)) return {1, 0, false};
+    motor::drive(d, MOTOR_DUTY_PCT);
     const uint32_t t0 = millis();
     while (millis() - t0 < timeoutMs) {
-        if (pressed(pin)) return millis() - t0;
-        delay(2);
+        if (pressed(stopPin)) {
+            m.ms = millis() - t0;
+            break;
+        }
+        if (motor::stalled(millis())) {
+            m.stalled = true;
+            break;
+        }
+        delay(1);
     }
-    return 0;
+    stopMotor();
+    m.counts = motor::count() - c0;
+    return m;
 }
 
-void testServo() {
-    Serial.println("\n>> SERVO: unlock, then lock (moves the bolt)");
-    const uint32_t limit = SERVO_MOVE_TIMEOUT_MS * 2;
-    const uint32_t tu = driveUntil(SERVO_UNLOCK_US, PIN_SW_UNLOCKED, limit);
+void jog(char which, int ms) {
+    ms = constrain(ms, 20, 1000);
+    const bool unlock = which == 'u';
+    const motor::Dir d = unlock ? motor::Dir::Unlock : motor::Dir::Lock;
+    const uint8_t stopPin = unlock ? PIN_SW_UNLOCKED : PIN_SW_LOCKED;
+    const Move m = driveTo(d, stopPin, (uint32_t)ms);
+    Serial.printf("jog %s %d ms: encoder %+ld counts%s%s\n", unlock ? "unlock" : "lock", ms, (long)m.counts,
+                  m.ms ? ", stopped at the limit switch" : "", m.stalled ? ", STALLED (no encoder movement)" : "");
+}
+
+void testMotor() {
+    Serial.println("\n>> MOTOR: unlock, then lock (moves the bolt)");
+    const uint32_t limit = MOTOR_MOVE_TIMEOUT_MS * 2;
+    const Move u = driveTo(motor::Dir::Unlock, PIN_SW_UNLOCKED, limit);
     delay(300);
-    const uint32_t tl = driveUntil(SERVO_LOCK_US, PIN_SW_LOCKED, limit);
-    delay(300);
-    servoRelease();
-    if (tu && tl) {
-        const bool slow = tu > SERVO_MOVE_TIMEOUT_MS || tl > SERVO_MOVE_TIMEOUT_MS;
-        st::record("servo + limit switches", slow ? st::WARN : st::PASS, "unlock %lu ms, lock %lu ms (firmware allows %lu ms)%s",
-                   (unsigned long)tu, (unsigned long)tl, (unsigned long)SERVO_MOVE_TIMEOUT_MS,
-                   slow ? ": too slow, the main firmware would report FAULT" : "");
-    } else if (!tu && !tl) {
-        st::record("servo + limit switches", st::FAIL, "neither switch reached in %lu ms: check servo 5 V power, signal on GPIO18, pulse widths (Q3), limit switches", (unsigned long)limit);
+    const Move l = driveTo(motor::Dir::Lock, PIN_SW_LOCKED, limit);
+    char note[160];
+    snprintf(note, sizeof(note), "unlock %lu ms / %+ld counts, lock %lu ms / %+ld counts (timeout %lu ms)",
+             (unsigned long)u.ms, (long)u.counts, (unsigned long)l.ms, (long)l.counts,
+             (unsigned long)MOTOR_MOVE_TIMEOUT_MS);
+    if (u.ms && l.ms) {
+        const bool slow = u.ms > MOTOR_MOVE_TIMEOUT_MS || l.ms > MOTOR_MOVE_TIMEOUT_MS;
+        const bool noEnc = u.counts == 0 && l.counts == 0 && u.ms > 1 && l.ms > 1;
+        st::record("motor + limit switches", slow || noEnc ? st::WARN : st::PASS, "%s%s%s", note,
+                   slow ? ": too slow, raise MOTOR_MOVE_TIMEOUT_MS (Q2)" : "",
+                   noEnc ? ": no encoder counts, set ENCODER_STALL_DETECT false or fix the encoder" : "");
+    } else if (u.stalled || l.stalled) {
+        st::record("motor + limit switches", st::FAIL, "%s: STALLED. Bolt jammed, motor supply missing, or encoder not working (Q3)", note);
+    } else if (!u.ms && l.ms) {
+        st::record("motor + limit switches", st::FAIL, "%s: unlock never reached SW2. If the bolt moved the wrong way, set MOTOR_INVERT (Q1)", note);
+    } else if (u.ms && !l.ms) {
+        st::record("motor + limit switches", st::FAIL, "%s: lock never reached SW1. If the bolt moved the wrong way, set MOTOR_INVERT (Q1)", note);
     } else {
-        st::record("servo + limit switches", st::FAIL, "%s switch never reached: adjust %s (Q3) or the switch position",
-                   tu ? "locked (SW1)" : "unlocked (SW2)", tu ? "SERVO_LOCK_US" : "SERVO_UNLOCK_US");
+        st::record("motor + limit switches", st::FAIL, "%s: no switch reached. Check L298N motor supply, ENA jumper removed, IN1/IN2/ENA wiring (Q4)", note);
     }
 }
 
 void monitor() {
     Serial.println("live monitor, type anything to stop");
-    uint32_t seen = gEdges;
+    uint32_t vib = gVibEdges;
     while (!st::abortRequested()) {
-        Serial.printf("SW1/locked %-8s SW2/unlocked %-8s REED %s  GPIO32 %s  POT %4d  edges %lu%s\n",
+        Serial.printf("SW1/locked %-8s SW2/unlocked %-8s REED %s  SW-420 %s%s  PIR %s  encoder %ld\n",
                       pressed(PIN_SW_LOCKED) ? "PRESSED" : "-", pressed(PIN_SW_UNLOCKED) ? "PRESSED" : "-",
                       digitalRead(PIN_REED) == DOOR_CLOSED_LEVEL ? "closed" : "OPEN  ",
-                      lvl(digitalRead(PIN_INTRUSION)), analogRead(PIN_POT), (unsigned long)gEdges,
-                      gEdges != seen ? "  <- edge" : "");
-        seen = gEdges;
+                      lvl(digitalRead(PIN_VIBRATION)), gVibEdges != vib ? "(edge)" : "      ",
+                      lvl(digitalRead(PIN_PIR)), (long)motor::count());
+        vib = gVibEdges;
         delay(250);
     }
 }
 
 void runAuto() {
-    Serial.println("\n---- automatic checks (servo is not moved) ----");
+    Serial.println("\n---- automatic checks (motor is not moved) ----");
     st::testRadio();
     testLed();
     testBuzzer();
     testSwitchesIdle();
-    testPotIdle();
-    testIntrusionIdle();
-    st::record("L293D", st::PASS, "EN (GPIO23) and IN2 (GPIO19) held LOW, driver off");
+    testEncoderIdle();
+    testVibrationIdle();
+    testPirIdle();
+    st::record("L298N outputs", st::PASS, "IN1 (GPIO18), IN2 (GPIO19), ENA (GPIO23) held LOW, motor off");
     st::summary();
 }
 
 void help() {
-    Serial.println("commands: switches | pot | intrusion | servo yes | s <us> | r | b | monitor | auto | all | summary | help");
+    Serial.println("commands: switches | encoder | vibration | motion | jog u|l <ms> | motor yes | b | monitor | auto | all | summary | help");
 }
 
 }  // namespace
 
 void setup() {
-    pinMode(PIN_BUZZER, OUTPUT);
-    digitalWrite(PIN_BUZZER, LOW);
-    for (uint8_t p : {PIN_L293D_EN, PIN_L293D_IN2, PIN_SERVO, PIN_LED_RED}) {
+    for (uint8_t p : {PIN_MOTOR_IN1, PIN_MOTOR_IN2, PIN_MOTOR_ENA, PIN_BUZZER, PIN_LED_RED, PIN_ONBOARD_LED}) {
         pinMode(p, OUTPUT);
         digitalWrite(p, LOW);
     }
+    motor::begin();
     pinMode(PIN_SW_LOCKED, INPUT_PULLUP);
     pinMode(PIN_SW_UNLOCKED, INPUT_PULLUP);
     pinMode(PIN_REED, INPUT_PULLUP);
-    pinMode(PIN_INTRUSION, INPUT);
-    attachInterrupt(digitalPinToInterrupt(PIN_INTRUSION), onEdge, CHANGE);
-    analogSetPinAttenuation(PIN_POT, ADC_11db);
-    ledcSetup(SERVO_LEDC_CH, 50, 16);
+    pinMode(PIN_VIBRATION, INPUT);
+    pinMode(PIN_PIR, INPUT);
+    attachInterrupt(digitalPinToInterrupt(PIN_VIBRATION), onVib, CHANGE);
+    attachInterrupt(digitalPinToInterrupt(PIN_PIR), onPir, CHANGE);
     ledcSetup(BUZZER_LEDC_CH, 2000, 10);
     ledcAttachPin(PIN_BUZZER, BUZZER_LEDC_CH);
     ledcWriteTone(BUZZER_LEDC_CH, 0);
 
     Serial.begin(115200);
     delay(50);
-    Serial.println("\n[kick] INTERIOR component kick test. Hardware Rev B pin map, servo assumed on GPIO18.");
+    Serial.println("\n[kick] INTERIOR component kick test. L298N + encoder wiring.");
     runAuto();
     help();
 }
@@ -347,21 +391,16 @@ void loop() {
     static char line[32];
     if (st::readLine(line, sizeof(line))) {
         if (!strcmp(line, "switches")) testSwitches();
-        else if (!strcmp(line, "pot")) testPot();
-        else if (!strcmp(line, "intrusion")) testIntrusion();
-        else if (!strcmp(line, "servo yes")) testServo();
-        else if (!strcmp(line, "servo")) { Serial.println("this moves the bolt: type 'servo yes'"); return; }
-        else if (line[0] == 's' && line[1] == ' ') {
-            const int us = atoi(line + 2);
-            if (us >= 500 && us <= 2500) { servoUs(us); Serial.printf("servo held at %d us ('r' releases)\n", us); }
-            else Serial.println("pulse must be 500..2500 us");
-            return;
-        }
-        else if (!strcmp(line, "r")) { servoRelease(); Serial.println("servo released"); return; }
+        else if (!strcmp(line, "encoder")) testEncoder();
+        else if (!strcmp(line, "vibration")) testVibration();
+        else if (!strcmp(line, "motion")) testMotion();
+        else if (!strcmp(line, "motor yes")) testMotor();
+        else if (!strcmp(line, "motor")) { Serial.println("this moves the bolt: type 'motor yes'"); return; }
+        else if (!strncmp(line, "jog ", 4) && (line[4] == 'u' || line[4] == 'l')) { jog(line[4], atoi(line + 5)); return; }
         else if (!strcmp(line, "b")) { beepHz(2000, 150); return; }
         else if (!strcmp(line, "monitor")) { monitor(); return; }
         else if (!strcmp(line, "auto")) { runAuto(); return; }
-        else if (!strcmp(line, "all")) { runAuto(); testSwitches(); testPot(); testIntrusion(); }
+        else if (!strcmp(line, "all")) { runAuto(); testSwitches(); testEncoder(); testVibration(); testMotion(); }
         else if (!strcmp(line, "summary")) {}
         else { help(); return; }
         st::summary();

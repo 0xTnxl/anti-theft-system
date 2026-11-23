@@ -1,17 +1,18 @@
-// Combined intrusion input on GPIO32 (SW-420 DO and HC-SR501 OUT tied together).
-// The firmware cannot tell which sensor fired. It trips when either
-//   - at least N active edges arrive within INTRUSION_WINDOW_MS (vibration), or
-//   - the line stays active for INTRUSION_HOLD_MS (PIR gives one long pulse).
-// N comes from the potentiometer.
+// Intrusion sensors, now on separate pins:
+//   SW-420 vibration on GPIO32: trips on VIBRATION_EVENTS knocks within VIBRATION_WINDOW_MS.
+//   HC-SR501 motion on GPIO34:  trips when the output stays active for PIR_HOLD_MS.
 #pragma once
 #include <stdint.h>
 
 namespace intrusion {
 
+enum Trip : uint8_t { NONE = 0, VIBRATION = 1, MOTION = 2 };
+
 void begin();
-// Returns true when the filter trips. While !armed, events are discarded.
-bool update(uint32_t nowMs, bool armed, uint8_t requiredEvents);
-bool levelActive();
-uint32_t totalEdges();   // diagnostics
+// While !armed, events are discarded. Returns which sensor tripped (vibration first).
+Trip update(uint32_t nowMs, bool armed);
+bool vibrationActive();
+bool motionActive();
+uint32_t vibrationEdges();   // diagnostics
 
 }  // namespace intrusion

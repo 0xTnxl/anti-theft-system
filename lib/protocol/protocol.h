@@ -42,10 +42,11 @@ enum LockState : uint8_t {
 enum AlarmCause : uint8_t {
     ALARM_NONE = 0,
     ALARM_FORCED_DOOR = 1,   // door opened while bolt locked
-    ALARM_INTRUSION = 2,     // GPIO32 (vibration / PIR)
+    ALARM_INTRUSION = 2,     // SW-420 vibration (GPIO32)
     ALARM_TAMPER_LINK = 3,   // exterior silent while armed
     ALARM_TAMPER_RF = 4,     // repeated authentication failures on the radio link
     ALARM_BOLT_TAMPER = 5,   // bolt left "locked" without a command
+    ALARM_MOTION = 6,        // HC-SR501 PIR (GPIO34)
 };
 
 enum StatusFlags : uint8_t {

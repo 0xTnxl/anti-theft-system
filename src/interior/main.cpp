@@ -1,5 +1,5 @@
-// Interior module: verifies card + PIN, drives the S3003 servo bolt, watches
-// the door, limit switches and intrusion input, runs the alarm and the USB
+// Interior module: verifies card + PIN, drives the bolt motor (L298N + encoder),
+// watches the door, limit switches, vibration and motion sensors, runs the alarm and the USB
 // serial console (enrollment). See docs/DESIGN.md sections 5 and 6.2.
 #include <Arduino.h>
 #include <esp_random.h>
@@ -10,6 +10,7 @@
 #include "credentials.h"
 #include "espnow_transport.h"
 #include "intrusion.h"
+#include "motor.h"
 #include "mbedtls/platform_util.h"
 #include "protocol.h"
 #include "secrets_guard.h"
@@ -63,25 +64,38 @@ Debounced gSwLocked = {PIN_SW_LOCKED, SWITCH_PRESSED_LEVEL, SWITCH_DEBOUNCE_MS};
 Debounced gSwUnlocked = {PIN_SW_UNLOCKED, SWITCH_PRESSED_LEVEL, SWITCH_DEBOUNCE_MS};
 Debounced gDoorClosed = {PIN_REED, DOOR_CLOSED_LEVEL, REED_DEBOUNCE_MS};
 
-// ---------------------------------------------------------------- servo ---
+// ---------------------------------------------------------------- motor ---
 
-bool gServoAttached = false;
+bool gMotorOn = false;
+uint32_t gBrakeUntil = 0;   // 0 = not braking
+uint32_t gMoveStartMs = 0;
+int32_t gMoveStartCount = 0;
 
-void servoDrive(uint16_t us) {
-    if (!gServoAttached) {
-        ledcAttachPin(PIN_SERVO, SERVO_LEDC_CH);
-        gServoAttached = true;
-    }
-    ledcWrite(SERVO_LEDC_CH, (uint32_t)us * 65536UL / 20000UL);   // 16-bit at 50 Hz
+void motorRun(motor::Dir d, uint32_t now) {
+    motor::drive(d, MOTOR_DUTY_PCT);
+    gMotorOn = true;
+    gBrakeUntil = 0;
+    gMoveStartMs = now;
+    gMoveStartCount = motor::count();
 }
 
-void servoRelease() {
-    if (!gServoAttached) return;
-    ledcWrite(SERVO_LEDC_CH, 0);
-    ledcDetachPin(PIN_SERVO);
-    pinMode(PIN_SERVO, OUTPUT);
-    digitalWrite(PIN_SERVO, LOW);
-    gServoAttached = false;
+void motorStop(uint32_t now) {
+    if (!gMotorOn) return;
+    motor::brake();
+    gMotorOn = false;
+    gBrakeUntil = (now + MOTOR_BRAKE_MS) | 1;
+}
+
+void motorService(uint32_t now) {
+    if (gBrakeUntil && (int32_t)(now - gBrakeUntil) >= 0) {
+        motor::coast();
+        gBrakeUntil = 0;
+    }
+}
+
+void logMove(const char* what, uint32_t now) {
+    Serial.printf("[lock] %s in %lu ms, encoder %ld counts\n", what,
+                  (unsigned long)(now - gMoveStartMs), (long)(motor::count() - gMoveStartCount));
 }
 
 // --------------------------------------------------------------- buzzer ---
@@ -115,7 +129,6 @@ uint32_t gLastStatusMs = 0;
 
 proto::LockState gLock = proto::LOCK_UNKNOWN;
 uint32_t gLockSince = 0;
-uint32_t gTargetReachedMs = 0;   // 0 = limit switch not reached yet
 bool gRetried = false;
 uint32_t gBackoffUntil = 0;      // LOCKING retry: back off towards unlock first
 bool gDoorOpenedSinceUnlock = false;
@@ -128,9 +141,6 @@ uint32_t gArmedSince = 0;
 
 uint32_t gRfFails[RF_TAMPER_FAILS] = {};
 uint8_t gRfFailIdx = 0;
-
-uint8_t gSensitivity = SENSITIVITY_MAX_EVENTS;
-uint32_t gLastPotMs = 0;
 
 uint32_t gLockoutUntil = 0;
 uint32_t gLastAuthMs = 0;
@@ -150,22 +160,21 @@ const char* lockName(uint8_t s) {
 }
 
 const char* alarmName(uint8_t a) {
-    static const char* names[] = {"NONE", "FORCED_DOOR", "INTRUSION", "TAMPER_LINK", "TAMPER_RF",
-                                  "BOLT_TAMPER"};
-    return a < 6 ? names[a] : "?";
+    static const char* names[] = {"NONE",      "FORCED_DOOR", "VIBRATION", "TAMPER_LINK",
+                                  "TAMPER_RF", "BOLT_TAMPER", "MOTION"};
+    return a < 7 ? names[a] : "?";
 }
 
 void setLock(proto::LockState s, uint32_t now) {
     if (s != gLock) Serial.printf("[lock] %s -> %s\n", lockName(gLock), lockName(s));
     gLock = s;
     gLockSince = now;
-    gTargetReachedMs = 0;
     gStatusDirty = true;
 }
 
 void startUnlock(uint32_t now) {
     gBackoffUntil = 0;
-    servoDrive(SERVO_UNLOCK_US);
+    motorRun(motor::Dir::Unlock, now);
     setLock(proto::LOCK_UNLOCKING, now);
 }
 
@@ -173,13 +182,14 @@ void startLock(uint32_t now) {
     if (!gDoorClosed.stable) return;   // never throw the bolt with the door open
     gRetried = false;
     gBackoffUntil = 0;
-    servoDrive(SERVO_LOCK_US);
+    motorRun(motor::Dir::Lock, now);
     setLock(proto::LOCK_LOCKING, now);
 }
 
 void fault(uint32_t now, const char* why) {
-    Serial.printf("[lock] FAULT: %s\n", why);
-    servoRelease();
+    Serial.printf("[lock] FAULT: %s (encoder %ld counts this move)\n", why,
+                  (long)(motor::count() - gMoveStartCount));
+    motorStop(now);
     setLock(proto::LOCK_FAULT, now);
     beep(400, 150, 100, 3);
 }
@@ -206,14 +216,17 @@ bool armedBase() { return !gDisarmed && gLock == proto::LOCK_LOCKED && gDoorClos
 void updateLock(uint32_t now) {
     switch (gLock) {
         case proto::LOCK_UNLOCKING:
-            if (gSwUnlocked.stable) {
-                if (!gTargetReachedMs) gTargetReachedMs = now;
-                if (elapsed(now, gTargetReachedMs, SERVO_SETTLE_MS)) {
-                    servoRelease();
-                    gDoorOpenedSinceUnlock = !gDoorClosed.stable;
-                    setLock(proto::LOCK_UNLOCKED, now);
-                }
-            } else if (elapsed(now, gLockSince, SERVO_MOVE_TIMEOUT_MS)) {
+            // Stop on the first contact (raw), confirm with the debounced state.
+            if (gMotorOn && gSwUnlocked.raw) {
+                motorStop(now);
+                logMove("unlock switch reached", now);
+            }
+            if (!gMotorOn && gSwUnlocked.stable) {
+                gDoorOpenedSinceUnlock = !gDoorClosed.stable;
+                setLock(proto::LOCK_UNLOCKED, now);
+            } else if (gMotorOn && motor::stalled(now)) {
+                fault(now, "motor stalled while unlocking (no encoder movement)");
+            } else if (elapsed(now, gLockSince, MOTOR_MOVE_TIMEOUT_MS)) {
                 fault(now, "unlock limit switch not reached");
             }
             break;
@@ -235,27 +248,35 @@ void updateLock(uint32_t now) {
                 break;
             }
             if (gBackoffUntil) {
+                if (gMotorOn && gSwUnlocked.raw) motorStop(now);   // do not push into the end stop
                 if ((int32_t)(now - gBackoffUntil) >= 0) {
                     gBackoffUntil = 0;
-                    servoDrive(SERVO_LOCK_US);
+                    motorRun(motor::Dir::Lock, now);
                     gLockSince = now;
                 }
                 break;
             }
-            if (gSwLocked.stable) {
-                if (!gTargetReachedMs) gTargetReachedMs = now;
-                if (elapsed(now, gTargetReachedMs, SERVO_SETTLE_MS)) {
-                    servoRelease();
-                    setLock(proto::LOCK_LOCKED, now);
-                }
-            } else if (elapsed(now, gLockSince, SERVO_MOVE_TIMEOUT_MS)) {
-                if (!gRetried) {
-                    Serial.println("[lock] lock switch not reached, retrying once");
-                    gRetried = true;
-                    servoDrive(SERVO_UNLOCK_US);
-                    gBackoffUntil = now + SERVO_RETRY_BACKOFF_MS;
-                } else {
-                    fault(now, "lock limit switch not reached");
+            if (gMotorOn && gSwLocked.raw) {
+                motorStop(now);
+                logMove("lock switch reached", now);
+            }
+            if (!gMotorOn && gSwLocked.stable) {
+                setLock(proto::LOCK_LOCKED, now);
+                break;
+            }
+            {
+                const bool stall = gMotorOn && motor::stalled(now);
+                if (stall || elapsed(now, gLockSince, MOTOR_MOVE_TIMEOUT_MS)) {
+                    if (!gRetried) {
+                        Serial.printf("[lock] %s, backing off and retrying once\n",
+                                      stall ? "motor stalled while locking" : "lock switch not reached");
+                        gRetried = true;
+                        motorRun(motor::Dir::Unlock, now);
+                        gBackoffUntil = now + MOTOR_RETRY_BACKOFF_MS;
+                    } else {
+                        fault(now, stall ? "motor stalled while locking (no encoder movement)"
+                                         : "lock limit switch not reached");
+                    }
                 }
             }
             break;
@@ -308,7 +329,9 @@ void updateAlarmInputs(uint32_t now) {
 
     const bool intrusionArmed =
         base && elapsed(now, gArmedSince, ARM_DELAY_MS) && now >= PIR_WARMUP_MS;
-    if (intrusion::update(now, intrusionArmed, gSensitivity)) raiseAlarm(proto::ALARM_INTRUSION, now);
+    const intrusion::Trip trip = intrusion::update(now, intrusionArmed);
+    if (trip == intrusion::VIBRATION) raiseAlarm(proto::ALARM_INTRUSION, now);
+    if (trip == intrusion::MOTION) raiseAlarm(proto::ALARM_MOTION, now);
 
     if (LINK_LOSS_IS_ALARM && base && elapsed(now, gLastRxMs, INT_LINK_TIMEOUT_MS))
         raiseAlarm(proto::ALARM_TAMPER_LINK, now);
@@ -321,16 +344,8 @@ void updateAlarmInputs(uint32_t now) {
     uint8_t recent = 0;
     for (uint32_t t : gRfFails) recent += t && !elapsed(now, t, RF_TAMPER_WINDOW_MS);
     if (recent >= RF_TAMPER_FAILS && base) raiseAlarm(proto::ALARM_TAMPER_RF, now);
-
-    if (elapsed(now, gLastPotMs, 500)) {
-        gLastPotMs = now;
-        const uint32_t raw = analogRead(PIN_POT);   // 0..4095, higher = more sensitive
-        const uint32_t span = SENSITIVITY_MAX_EVENTS - SENSITIVITY_MIN_EVENTS;
-        gSensitivity = (uint8_t)(SENSITIVITY_MAX_EVENTS - (raw * span + 2047) / 4095);
-    }
 }
 
-constexpr uint8_t PIN_ONBOARD_LED = 2;   // DevKit V1 blue LED, not used on Rev B
 uint32_t gIdentifyUntil = 0;
 
 void updateOutputs(uint32_t now) {
@@ -559,8 +574,10 @@ void printStatus(uint32_t now) {
     Serial.printf("lock=%s door=%s swLocked=%d swUnlocked=%d armed=%d disarmed=%d\n",
                   lockName(gLock), gDoorClosed.stable ? "closed" : "OPEN", gSwLocked.stable,
                   gSwUnlocked.stable, gArmedPrev, gDisarmed);
-    Serial.printf("alarm=%s intrusionLine=%d sensitivity=%u events link=%s lastRx=%lus ago\n",
-                  alarmName(gAlarm), intrusion::levelActive(), gSensitivity,
+    Serial.printf("motor=%s encoder=%ld vibration=%d motion=%d\n",
+                  gMotorOn ? "RUNNING" : "off", (long)motor::count(), intrusion::vibrationActive(),
+                  intrusion::motionActive());
+    Serial.printf("alarm=%s link=%s lastRx=%lus ago\n", alarmName(gAlarm),
                   gLink.established(now) ? "up" : "down",
                   (unsigned long)((now - gLastRxMs) / 1000));
     Serial.printf("cards=%u/%u fails=%lu lockout=%us enroll=%d\n", creds::count(), MAX_CREDENTIALS,
@@ -653,25 +670,23 @@ void setup() {
     // Quiet the buzzer first: GPIO14 toggles during boot (Rev B, accepted).
     pinMode(PIN_BUZZER, OUTPUT);
     digitalWrite(PIN_BUZZER, LOW);
-    pinMode(PIN_L293D_EN, OUTPUT);
-    digitalWrite(PIN_L293D_EN, LOW);
-    pinMode(PIN_L293D_IN2, OUTPUT);
-    digitalWrite(PIN_L293D_IN2, LOW);
-    pinMode(PIN_SERVO, OUTPUT);
-    digitalWrite(PIN_SERVO, LOW);
+    // Motor driver off before anything else: IN1, IN2, ENA all LOW.
+    for (uint8_t p : {PIN_MOTOR_IN1, PIN_MOTOR_IN2, PIN_MOTOR_ENA}) {
+        pinMode(p, OUTPUT);
+        digitalWrite(p, LOW);
+    }
     pinMode(PIN_LED_RED, OUTPUT);
     pinMode(PIN_ONBOARD_LED, OUTPUT);
     digitalWrite(PIN_ONBOARD_LED, LOW);
 
     Serial.begin(115200);
     delay(50);
-    Serial.println("\n[int] anti-theft interior module, Rev B wiring. Type 'help'.");
+    Serial.println("\n[int] anti-theft interior module, L298N + encoder wiring. Type 'help'.");
 
-    ledcSetup(SERVO_LEDC_CH, 50, 16);
+    motor::begin();
     ledcSetup(BUZZER_LEDC_CH, 2000, 10);
     ledcAttachPin(PIN_BUZZER, BUZZER_LEDC_CH);
     ledcWriteTone(BUZZER_LEDC_CH, 0);
-    analogSetPinAttenuation(PIN_POT, ADC_11db);
 
     const uint32_t now = millis();
     gSwLocked.begin(now);
@@ -708,6 +723,7 @@ void loop() {
     gDoorClosed.update(now);
 
     serviceLink(now);
+    motorService(now);
     updateLock(now);
     updateAlarmInputs(now);
     if (gEnrollMode && elapsed(now, gEnrollSince, ENROLL_TIMEOUT_MS)) {

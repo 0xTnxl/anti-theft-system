@@ -1,5 +1,5 @@
 {
-  "_comment": "Factory MAC of each physical board (printed by esptool chip_id). Swap the values to swap roles.",
-  "exterior": "58:2a:bd:60:5b:9c",
+  "_comment": "Factory MAC of each physical board (printed by esptool chip_id). Swap the values to swap roles. Previous exterior board: 58:2a:bd:60:5b:9c (replaced 2026-11).",
+  "exterior": "20:9b:a9:99:00:34",
   "interior": "70:4b:ca:04:97:20"
 }
