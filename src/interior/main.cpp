@@ -64,6 +64,30 @@ Debounced gSwLocked = {PIN_SW_LOCKED, SWITCH_PRESSED_LEVEL, SWITCH_DEBOUNCE_MS};
 Debounced gSwUnlocked = {PIN_SW_UNLOCKED, SWITCH_PRESSED_LEVEL, SWITCH_DEBOUNCE_MS};
 Debounced gDoorClosed = {PIN_REED, DOOR_CLOSED_LEVEL, REED_DEBOUNCE_MS};
 
+#ifdef ATDS_SIM_BOLT
+// TEST BUILD (env:interior_sim): no motor, no limit switches. A move just takes
+// SIM_BOLT_MOVE_MS. The door is set from the console ("door open|close") and the
+// SW-420 / PIR are ignored until "sensors on". Never fit this build to a door.
+constexpr uint32_t SIM_BOLT_MOVE_MS = 800;
+bool gSimDoorOpen = false;
+bool gSensorsOn = false;
+#else
+constexpr bool gSensorsOn = true;
+#endif
+
+// Simulated build: the console sets the door instead of the reed switch.
+void simDoor(uint32_t now) {
+#ifdef ATDS_SIM_BOLT
+    const bool closed = !gSimDoorOpen;
+    if (gDoorClosed.stable != closed) {
+        gDoorClosed.stable = gDoorClosed.raw = closed;
+        gDoorClosed.stableSinceMs = now;
+    }
+#else
+    (void)now;
+#endif
+}
+
 // ---------------------------------------------------------------- motor ---
 
 bool gMotorOn = false;
@@ -72,6 +96,11 @@ uint32_t gMoveStartMs = 0;
 int32_t gMoveStartCount = 0;
 
 void motorRun(motor::Dir d, uint32_t now) {
+#ifdef ATDS_SIM_BOLT
+    (void)d;
+    gMoveStartMs = now;
+    return;
+#endif
     motor::drive(d, MOTOR_DUTY_PCT);
     gMotorOn = true;
     gBrakeUntil = 0;
@@ -209,11 +238,37 @@ void clearAlarm(const char* by) {
     gStatusDirty = true;
 }
 
+#ifdef ATDS_SIM_BOLT
+constexpr bool SIM_BOLT = true;
+#else
+constexpr bool SIM_BOLT = false;
+#endif
+
 bool armedBase() { return !gDisarmed && gLock == proto::LOCK_LOCKED && gDoorClosed.stable; }
 
 // --------------------------------------------------------- lock machine ---
 
 void updateLock(uint32_t now) {
+#ifdef ATDS_SIM_BOLT
+    if (gLock == proto::LOCK_UNLOCKING) {
+        if (elapsed(now, gLockSince, SIM_BOLT_MOVE_MS)) {
+            Serial.println("[lock] (simulated) bolt retracted");
+            gDoorOpenedSinceUnlock = !gDoorClosed.stable;
+            setLock(proto::LOCK_UNLOCKED, now);
+        }
+        return;
+    }
+    if (gLock == proto::LOCK_LOCKING) {
+        if (!gDoorClosed.stable) {
+            Serial.println("[lock] door opened while locking, retracting");
+            startUnlock(now);
+        } else if (elapsed(now, gLockSince, SIM_BOLT_MOVE_MS)) {
+            Serial.println("[lock] (simulated) bolt thrown");
+            setLock(proto::LOCK_LOCKED, now);
+        }
+        return;
+    }
+#endif
     switch (gLock) {
         case proto::LOCK_UNLOCKING:
             // Stop on the first contact (raw), confirm with the debounced state.
@@ -289,6 +344,10 @@ void updateLock(uint32_t now) {
 }
 
 void bootLockState(uint32_t now) {
+#ifdef ATDS_SIM_BOLT
+    setLock(proto::LOCK_LOCKED, now);   // simulated bolt starts locked, door closed
+    return;
+#endif
     const bool l = gSwLocked.stable, u = gSwUnlocked.stable;
     if (l && u) {
         fault(now, "both limit switches pressed at boot");
@@ -323,12 +382,12 @@ void updateAlarmInputs(uint32_t now) {
     if (!gDisarmed && gLock == proto::LOCK_LOCKED && !gDoorClosed.stable)
         raiseAlarm(proto::ALARM_FORCED_DOOR, now);
 
-    if (BOLT_TAMPER_IS_ALARM && !gDisarmed && gLock == proto::LOCK_LOCKED && !gSwLocked.stable &&
+    if (BOLT_TAMPER_IS_ALARM && !SIM_BOLT && !gDisarmed && gLock == proto::LOCK_LOCKED && !gSwLocked.stable &&
         elapsed(now, gSwLocked.stableSinceMs, BOLT_TAMPER_MS))
         raiseAlarm(proto::ALARM_BOLT_TAMPER, now);
 
     const bool intrusionArmed =
-        base && elapsed(now, gArmedSince, ARM_DELAY_MS) && now >= PIR_WARMUP_MS;
+        gSensorsOn && base && elapsed(now, gArmedSince, ARM_DELAY_MS) && now >= PIR_WARMUP_MS;
     const intrusion::Trip trip = intrusion::update(now, intrusionArmed);
     if (trip == intrusion::VIBRATION) raiseAlarm(proto::ALARM_INTRUSION, now);
     if (trip == intrusion::MOTION) raiseAlarm(proto::ALARM_MOTION, now);
@@ -626,6 +685,14 @@ void runCommand(char* cmd, uint32_t now) {
         } else {
             Serial.println("type 'wipe yes' to delete every card");
         }
+#ifdef ATDS_SIM_BOLT
+    } else if (!strcmp(cmd, "door") && arg && (!strcmp(arg, "open") || !strcmp(arg, "close"))) {
+        gSimDoorOpen = !strcmp(arg, "open");
+        Serial.printf("[sim] door %s\n", gSimDoorOpen ? "OPEN" : "closed");
+    } else if (!strcmp(cmd, "sensors") && arg && (!strcmp(arg, "on") || !strcmp(arg, "off"))) {
+        gSensorsOn = !strcmp(arg, "on");
+        Serial.printf("[sim] SW-420 and PIR %s\n", gSensorsOn ? "ON" : "ignored");
+#endif
     } else if (CONSOLE_TEST_COMMANDS && !strcmp(cmd, "lock")) {
         if (gDoorClosed.stable) startLock(now);
         else Serial.println("door is open");
@@ -682,6 +749,9 @@ void setup() {
     Serial.begin(115200);
     delay(50);
     Serial.println("\n[int] anti-theft interior module, L298N + encoder wiring. Type 'help'.");
+#ifdef ATDS_SIM_BOLT
+    Serial.println("[int] TEST BUILD: SIMULATED BOLT, no motor. Console: door open|close, sensors on|off. Do not fit to a door.");
+#endif
 
     motor::begin();
     ledcSetup(BUZZER_LEDC_CH, 2000, 10);
@@ -711,6 +781,7 @@ void setup() {
     gLink.begin(slink::Role::Interior, ATDS_PSK, ATDS_MAC_EXTERIOR, ATDS_MAC_INTERIOR, rng);
     gLastRxMs = millis();
 
+    simDoor(millis());
     bootLockState(millis());
     Serial.printf("[int] PIR warm-up: intrusion input ignored for %lu s\n",
                   (unsigned long)(PIR_WARMUP_MS / 1000));
@@ -720,7 +791,8 @@ void loop() {
     const uint32_t now = millis();
     gSwLocked.update(now);
     gSwUnlocked.update(now);
-    gDoorClosed.update(now);
+    if (!SIM_BOLT) gDoorClosed.update(now);   // simulated build: door comes from the console
+    simDoor(now);
 
     serviceLink(now);
     motorService(now);

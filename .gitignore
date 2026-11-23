@@ -6,3 +6,5 @@ include/secrets.h
 anti-theft-1.png
 anti-theft-2.png
 
+# Flow test session logs
+flow_test_*.log

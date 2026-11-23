@@ -109,7 +109,14 @@ void setPhase(Phase p) {
     gPhase = p;
 }
 
+// Serial event log for tools/flow_test.py. Never prints PIN digits or card UIDs.
+const char* uiName(Ui ui) {
+    static const char* n[] = {"Linking", "CardWait", "PinEntry", "Verifying", "Result", "Lockout"};
+    return n[(uint8_t)ui];
+}
+
 void setUi(Ui ui, uint32_t now) {
+    if (ui != gUi) Serial.printf("[ui] %s -> %s\n", uiName(gUi), uiName(ui));
     gUi = ui;
     gUiDirty = true;
     gLastActivityMs = now;
@@ -283,6 +290,7 @@ void onMessage(const slink::RxResult& r, uint32_t now) {
             gSessionConfirmed = true;
             gAwaitConfirm = false;
             if (memcmp(&s, &gStatus, sizeof(s)) != 0) {
+                Serial.printf("[status] lock=%u alarm=%u flags=0x%02X\n", s.lock, s.alarm, s.flags);
                 gStatus = s;
                 if (gUi == Ui::CardWait) gUiDirty = true;
             }
@@ -390,6 +398,7 @@ void pollRfid(uint32_t now) {
     memcpy(gUid, uid, len);
     gUidLen = len;
     mbedtls_platform_zeroize(uid, sizeof(uid));
+    Serial.printf("[rfid] card read, %u-byte UID\n", len);
     gPinLen = 0;
     gPinTooShort = false;
     gLastKeyMs = now;
@@ -403,6 +412,8 @@ void handleKeys(uint32_t now) {
         gLastActivityMs = now;
         gUiDirty = true;
         gPinTooShort = false;
+        if (k >= '0' && k <= '9') Serial.printf("[key] digit (%u entered)\n", gPinLen < proto::PIN_MAX ? gPinLen + 1 : gPinLen);
+        else Serial.printf("[key] %c\n", k);
         if (k >= '0' && k <= '9') {
             if (gPinLen < proto::PIN_MAX) gPin[gPinLen++] = k;
         } else if (k == KEY_CLEAR) {
@@ -420,9 +431,11 @@ void handleKeys(uint32_t now) {
                 return;
             }
             gPinTooShort = true;
+            Serial.printf("[ui] PIN too short (%u digits), not sent\n", gPinLen);
         }
     }
     if (now - gLastKeyMs > PIN_ENTRY_TIMEOUT_MS) {
+        Serial.println("[ui] PIN entry timed out");
         wipeCredentials();
         setUi(Ui::CardWait, now);
     }
