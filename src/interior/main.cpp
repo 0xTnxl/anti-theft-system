@@ -522,6 +522,7 @@ proto::AuthResult handleAuth(const proto::AuthRequest& q, uint32_t now) {
     proto::AuthResult r = {};
     r.reqId = q.reqId;
     if (!requestValid(q)) {
+        Serial.printf("[auth] DENIED (malformed request: uid_len=%u pin_len=%u)\n", q.uidLen, q.pinLen);
         r.code = proto::AUTH_DENIED;
         r.attemptsLeft = attemptsLeft();
         return r;
@@ -608,6 +609,11 @@ void serviceLink(uint32_t now) {
                    r.payloadLen == proto::payloadSize(r.type)) {
             gLastRxMs = now;
             if (r.type == proto::HEARTBEAT) {
+                // Someone is using the door (exterior UI state PinEntry=2 or Verifying=3,
+                // see Ui in src/exterior/main.cpp): keep enroll mode from timing out.
+                proto::Heartbeat hb;
+                memcpy(&hb, r.payload, sizeof(hb));
+                if (gEnrollMode && (hb.extState == 2 || hb.extState == 3)) gEnrollSince = now;
                 sendStatus(now);
             } else if (r.type == proto::AUTH_REQUEST) {
                 proto::AuthRequest q;
@@ -662,7 +668,7 @@ void runCommand(char* cmd, uint32_t now) {
         gEnrollMode = true;
         gEnrollSince = now;
         gStatusDirty = true;
-        Serial.println("[enroll] tap the new card at the door and enter its PIN (60 s)");
+        Serial.println("[enroll] tap the new card at the door and enter its PIN (120 s)");
     } else if (!strcmp(cmd, "cancel")) {
         endEnroll();
         Serial.println("[enroll] cancelled");
@@ -799,7 +805,7 @@ void loop() {
     updateLock(now);
     updateAlarmInputs(now);
     if (gEnrollMode && elapsed(now, gEnrollSince, ENROLL_TIMEOUT_MS)) {
-        Serial.println("[enroll] timed out");
+        Serial.println("[enroll] timed out: next card is treated as a normal login");
         endEnroll();
     }
     updateOutputs(now);

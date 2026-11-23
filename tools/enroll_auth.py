@@ -18,6 +18,7 @@ At the exterior: tap the card (hold it flat ~1 s), type the PIN (4-8 digits), pr
 """
 import argparse
 import os
+import re
 import sys
 import time
 
@@ -45,14 +46,35 @@ def main():
         results.append((name, ok, note))
         print(f"  {'PASS' if ok else 'FAIL'}  {name}: {note}", flush=True)
 
-    def tap_and_pin(prompt):
+    def tap_and_pin(prompt, on_card=None):
         """Waits for one full card + PIN attempt. Returns (code, seconds, rfid_drops)."""
         me = ext.mark()
         say(prompt)
         ext.expect(r"\[rfid\] card read, (\d+)-byte UID", WAIT, me)
-        print("      card read, now type the PIN and press #", flush=True)
+        if on_card:
+            on_card()
+        print("      card read, now type the PIN and press #  (15 s without a key cancels)", flush=True)
         t0 = time.time()
-        r = ext.expect(r"\[auth\] result (\w+) attempts_left=(\d+) lockout=(\d+)s", WAIT, me)
+        # Echo keypad activity live: the OLED may be missing, so this is the only feedback.
+        seen, iseen, end, r = ext.mark(), intr.mark(), time.time() + WAIT, None
+        rx = re.compile(r"\[auth\] result (\w+) attempts_left=(\d+) lockout=(\d+)s")
+        while r is None:
+            for line in ext.lines[seen:]:
+                if line.startswith(("[key]", "[ui]")):
+                    print(f"      exterior: {line}", flush=True)
+                if "PIN entry timed out" in line:
+                    print("      !! no key for 15 s: back to tap-card. Tap the card again.", flush=True)
+                r = r or rx.search(line)
+            seen = len(ext.lines)
+            for line in intr.lines[iseen:]:
+                if line.startswith(("[enroll]", "[auth]", "[lock]", "[alarm]")):
+                    print(f"      interior: {line}", flush=True)
+            iseen = len(intr.lines)
+            if r is None and time.time() > end:
+                keys = len(ext.find(r"\[key\] ", me))
+                raise Fail(f"no PIN submitted within {WAIT} s ({keys} key presses detected"
+                           f"{': keypad not read, run the exterior kick test keys check' if not keys else ''})")
+            time.sleep(0.05)
         drops = len(ext.find(r"RC522 not responding", me))
         return r[1], int(r[2]), time.time() - t0, drops
 
@@ -78,10 +100,13 @@ def main():
         print("  Exterior LEDs: yellow = typing PIN / waiting, green = granted, red = denied.")
 
         if not args.auth_only:
-            m = intr.mark()
-            intr.send("enroll")
-            intr.expect(r"\[enroll\] tap", 3, m)
-            code, _, _, d1 = tap_and_pin("ENROLL 1/2: tap the card, type the new PIN, press #")
+            def start_enroll():
+                # Started when the card is read, so a slow card tap cannot use up
+                # the interior's enroll window before the PIN arrives.
+                m = intr.mark()
+                intr.send("enroll")
+                intr.expect(r"\[enroll\] tap", 3, m)
+            code, _, _, d1 = tap_and_pin("ENROLL 1/2: tap the card, type the new PIN, press #", start_enroll)
             if code != "ENROLL_AGAIN":
                 raise Fail(f"expected ENROLL_AGAIN, got {code}")
             m = intr.mark()

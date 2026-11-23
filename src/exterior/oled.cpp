@@ -9,8 +9,13 @@
 bool Oled::begin(uint8_t sda, uint8_t scl, uint8_t addr, uint32_t hz, bool flip) {
     addr_ = addr;
     Wire.begin(sda, scl, hz);
-    Wire.beginTransmission(addr_);
-    present_ = Wire.endTransmission() == 0;
+    // The module may still be powering up right after boot: probe a few times.
+    present_ = false;
+    for (int i = 0; i < 5 && !present_; i++) {
+        if (i) delay(100);
+        Wire.beginTransmission(addr_);
+        present_ = Wire.endTransmission() == 0;
+    }
     lastBusMs_ = millis();
     if (!present_) return false;
 
@@ -21,7 +26,7 @@ bool Oled::begin(uint8_t sda, uint8_t scl, uint8_t addr, uint32_t hz, bool flip)
         0xD3, 0x00,            // display offset
         0x40,                  // start line 0
         0x8D, 0x14,            // charge pump on
-        0x20, 0x00,            // horizontal addressing
+        0x20, 0x02,            // page addressing (SH1106 only has this mode)
         (uint8_t)(flip ? 0xA0 : 0xA1),   // segment remap
         (uint8_t)(flip ? 0xC0 : 0xC8),   // COM scan direction
         0xDA, 0x02,            // COM pins for 128x32
@@ -45,7 +50,7 @@ void Oled::cmds(const uint8_t* c, uint8_t n) {
     Wire.beginTransmission(addr_);
     Wire.write((uint8_t)0x00);
     Wire.write(c, n);
-    Wire.endTransmission();
+    if (Wire.endTransmission() != 0) writeErrors_++;
     lastBusMs_ = millis();
 }
 
@@ -85,13 +90,18 @@ void Oled::textCentered(int y, const char* s, uint8_t scale) {
 bool Oled::commit() {
     if (!present_ || !on_) return false;
     if (sentValid_ && memcmp(buf_, sent_, sizeof(buf_)) == 0) return false;
-    const uint8_t window[] = {0x21, 0, W - 1, 0x22, 0, H / 8 - 1};
-    cmds(window, sizeof(window));
-    for (size_t i = 0; i < sizeof(buf_); i += 32) {
-        Wire.beginTransmission(addr_);
-        Wire.write((uint8_t)0x40);
-        Wire.write(buf_ + i, 32);
-        Wire.endTransmission();
+    // Page by page with explicit column address: works on SSD1306 and SH1106
+    // (SH1106 has 132 columns, the visible 128 start at column 2).
+    for (uint8_t page = 0; page < H / 8; page++) {
+        const uint8_t pos[] = {(uint8_t)(0xB0 | page), (uint8_t)(0x00 | (colOffset_ & 0x0F)),
+                               (uint8_t)(0x10 | (colOffset_ >> 4))};
+        cmds(pos, sizeof(pos));
+        for (int x = 0; x < W; x += 32) {
+            Wire.beginTransmission(addr_);
+            Wire.write((uint8_t)0x40);
+            Wire.write(buf_ + page * W + x, 32);
+            if (Wire.endTransmission() != 0) writeErrors_++;
+        }
     }
     lastBusMs_ = millis();
     memcpy(sent_, buf_, sizeof(buf_));

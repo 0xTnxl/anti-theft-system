@@ -38,8 +38,9 @@ constexpr uint32_t CARD_COOLDOWN_MS = 1500;
 constexpr uint8_t PIN_I2C_SDA = 21;
 constexpr uint8_t PIN_I2C_SCL = 22;   // shared with RC522 RST
 constexpr uint8_t OLED_ADDR = 0x3C;
-constexpr uint32_t OLED_I2C_HZ = 400000;
+constexpr uint32_t OLED_I2C_HZ = 100000;   // 400 kHz failed on the bench wiring
 constexpr bool OLED_FLIP = false;     // rotate 180 degrees
+constexpr uint8_t OLED_COL_OFFSET = 0;   // 0 = SSD1306, 2 = SH1106 (find out with kick test 'oled')
 constexpr uint32_t OLED_SLEEP_MS = 30000;
 
 // ---- LEDs (active high) ---------------------------------------------------

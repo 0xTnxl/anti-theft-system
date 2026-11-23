@@ -542,6 +542,7 @@ void setup() {
 
     gKeypad.end();   // all keypad pins high-impedance until the PIN phase
     gRfid.begin(PIN_RC522_CS, RC522_SPI_HZ);
+    gOled.setColumnOffset(OLED_COL_OFFSET);
     if (!gOled.begin(PIN_I2C_SDA, PIN_I2C_SCL, OLED_ADDR, OLED_I2C_HZ, OLED_FLIP))
         Serial.println("[oled] SSD1306 not found at 0x3C");
 

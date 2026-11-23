@@ -20,6 +20,10 @@ public:
     bool isOn() const { return on_; }
     bool present() const { return present_; }
     uint32_t lastBusMs() const { return lastBusMs_; }
+    // Column of the first visible pixel: 0 for SSD1306, 2 for SH1106 (OLED_COL_OFFSET).
+    void setColumnOffset(uint8_t c) { colOffset_ = c; sentValid_ = false; }
+    void forceRedraw() { sentValid_ = false; }
+    uint32_t writeErrors() const { return writeErrors_; }   // I2C writes not acknowledged
 
 private:
     void cmds(const uint8_t* c, uint8_t n);
@@ -30,6 +34,8 @@ private:
     bool on_ = false;
     bool sentValid_ = false;
     uint32_t lastBusMs_ = 0;
+    uint8_t colOffset_ = 0;
+    uint32_t writeErrors_ = 0;
     uint8_t buf_[W * H / 8] = {};
     uint8_t sent_[W * H / 8] = {};
 };

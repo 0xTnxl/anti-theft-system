@@ -82,7 +82,7 @@ constexpr uint32_t LOCKOUT_THRESHOLD = 5;
 constexpr uint32_t LOCKOUT_BASE_S = 30;
 constexpr uint32_t LOCKOUT_MAX_S = 900;
 constexpr uint32_t AUTH_MIN_INTERVAL_MS = 1000;
-constexpr uint32_t ENROLL_TIMEOUT_MS = 60000;
+constexpr uint32_t ENROLL_TIMEOUT_MS = 120000;   // restarted while someone is typing a PIN
 
 // ---- Serial console -------------------------------------------------------
 // lock / unlock / arm / disarm / clear / resetlockout. Turn off for production.
