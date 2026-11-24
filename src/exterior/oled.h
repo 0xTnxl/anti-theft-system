@@ -24,6 +24,10 @@ public:
     void setColumnOffset(uint8_t c) { colOffset_ = c; sentValid_ = false; }
     void forceRedraw() { sentValid_ = false; }
     uint32_t writeErrors() const { return writeErrors_; }   // I2C writes not acknowledged
+    // Called between I2C transfers in commit(), so the keypad keeps being scanned
+    // while the screen is redrawn.
+    void setIdleHook(void (*hook)()) { idle_ = hook; }
+    uint32_t lastCommitMs() const { return lastCommitMs_; }   // duration of the last redraw
 
 private:
     void cmds(const uint8_t* c, uint8_t n);
@@ -36,6 +40,8 @@ private:
     uint32_t lastBusMs_ = 0;
     uint8_t colOffset_ = 0;
     uint32_t writeErrors_ = 0;
+    void (*idle_)() = nullptr;
+    uint32_t lastCommitMs_ = 0;
     uint8_t buf_[W * H / 8] = {};
     uint8_t sent_[W * H / 8] = {};
 };

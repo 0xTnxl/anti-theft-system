@@ -9,6 +9,9 @@
 bool Oled::begin(uint8_t sda, uint8_t scl, uint8_t addr, uint32_t hz, bool flip) {
     addr_ = addr;
     Wire.begin(sda, scl, hz);
+    // Default is 50 ms per transfer. With a bad SCL contact every failed transfer
+    // waited that long, freezing the keypad. A good transfer takes about 3 ms.
+    Wire.setTimeOut(10);
     // The module may still be powering up right after boot: probe a few times.
     present_ = false;
     for (int i = 0; i < 5 && !present_; i++) {
@@ -90,9 +93,13 @@ void Oled::textCentered(int y, const char* s, uint8_t scale) {
 bool Oled::commit() {
     if (!present_ || !on_) return false;
     if (sentValid_ && memcmp(buf_, sent_, sizeof(buf_)) == 0) return false;
+    const uint32_t t0 = millis();
     // Page by page with explicit column address: works on SSD1306 and SH1106
     // (SH1106 has 132 columns, the visible 128 start at column 2).
+    // Only pages that changed are sent.
     for (uint8_t page = 0; page < H / 8; page++) {
+        if (sentValid_ && memcmp(buf_ + page * W, sent_ + page * W, W) == 0) continue;
+        if (idle_) idle_();
         const uint8_t pos[] = {(uint8_t)(0xB0 | page), (uint8_t)(0x00 | (colOffset_ & 0x0F)),
                                (uint8_t)(0x10 | (colOffset_ >> 4))};
         cmds(pos, sizeof(pos));
@@ -101,9 +108,11 @@ bool Oled::commit() {
             Wire.write((uint8_t)0x40);
             Wire.write(buf_ + page * W + x, 32);
             if (Wire.endTransmission() != 0) writeErrors_++;
+            if (idle_) idle_();
         }
     }
     lastBusMs_ = millis();
+    lastCommitMs_ = lastBusMs_ - t0;
     memcpy(sent_, buf_, sizeof(buf_));
     sentValid_ = true;
     return true;

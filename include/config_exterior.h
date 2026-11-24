@@ -17,7 +17,7 @@ constexpr char KEYMAP[4][4] = {
 };
 constexpr char KEY_CLEAR = '*';
 constexpr char KEY_SUBMIT = '#';
-constexpr uint32_t KEYPAD_SCAN_MS = 10;
+constexpr uint32_t KEYPAD_SCAN_MS = 5;
 constexpr uint8_t KEYPAD_DEBOUNCE_SCANS = 3;
 
 // ---- RC522 (MOD2) ---------------------------------------------------------

@@ -72,6 +72,10 @@ uint32_t gLockoutUntil = 0;
 
 uint32_t gLastActivityMs = 0;
 
+// Keys caught while the OLED is being redrawn (see keypadIdleHook).
+char gKeyQueue[8];
+uint8_t gKeyHead = 0, gKeyTail = 0;
+
 // Console + "identify" (slow blink on the red LED and the DevKit's onboard LED).
 constexpr uint8_t PIN_ONBOARD_LED = 2;   // DevKit V1 blue LED, not used on Rev B
 char gTestLine[48];
@@ -127,6 +131,7 @@ void setUi(Ui ui, uint32_t now) {
             break;
         case Ui::PinEntry:
             setPhase(Phase::Pin);
+            gKeyHead = gKeyTail = 0;
             break;
         default:
             setPhase(Phase::None);
@@ -181,7 +186,9 @@ void render(uint32_t now) {
         }
     }
     if (!gOled.isOn()) gOled.power(true);
-    gOled.commit();
+    if (gOled.commit() && gOled.lastCommitMs() > 40)
+        Serial.printf("[oled] slow redraw: %lu ms (I2C errors so far %lu)\n",
+                      (unsigned long)gOled.lastCommitMs(), (unsigned long)gOled.writeErrors());
 }
 
 void updateLeds(uint32_t now) {
@@ -405,8 +412,19 @@ void pollRfid(uint32_t now) {
     setUi(Ui::PinEntry, now);
 }
 
+void keypadIdleHook() {
+    if (!gKeypad.active()) return;
+    const char k = gKeypad.poll(millis());
+    if (k && (uint8_t)(gKeyHead - gKeyTail) < sizeof(gKeyQueue)) gKeyQueue[gKeyHead++ % sizeof(gKeyQueue)] = k;
+}
+
+char nextKey(uint32_t now) {
+    if (gKeyTail != gKeyHead) return gKeyQueue[gKeyTail++ % sizeof(gKeyQueue)];
+    return gKeypad.poll(now);
+}
+
 void handleKeys(uint32_t now) {
-    const char k = gKeypad.poll(now);
+    const char k = nextKey(now);
     if (k) {
         gLastKeyMs = now;
         gLastActivityMs = now;
@@ -543,6 +561,7 @@ void setup() {
     gKeypad.end();   // all keypad pins high-impedance until the PIN phase
     gRfid.begin(PIN_RC522_CS, RC522_SPI_HZ);
     gOled.setColumnOffset(OLED_COL_OFFSET);
+    gOled.setIdleHook(keypadIdleHook);
     if (!gOled.begin(PIN_I2C_SDA, PIN_I2C_SCL, OLED_ADDR, OLED_I2C_HZ, OLED_FLIP))
         Serial.println("[oled] SSD1306 not found at 0x3C");
 

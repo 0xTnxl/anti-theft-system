@@ -27,7 +27,7 @@ char Keypad::scan() {
     for (uint8_t r = 0; r < 4; r++) {
         pinMode(PIN_KP_ROWS[r], OUTPUT);
         digitalWrite(PIN_KP_ROWS[r], LOW);
-        delayMicroseconds(10);
+        delayMicroseconds(30);   // long ribbons / membrane keypads settle slowly
         for (uint8_t c = 0; c < 4; c++) {
             if (digitalRead(PIN_KP_COLS[c]) == LOW && !found) found = KEYMAP[r][c];
         }
