@@ -325,8 +325,10 @@ void testMotor() {
         st::record("motor + limit switches", st::FAIL, "%s: unlock never reached SW2. If the bolt moved the wrong way, set MOTOR_INVERT (Q1)", note);
     } else if (u.ms && !l.ms) {
         st::record("motor + limit switches", st::FAIL, "%s: lock never reached SW1. If the bolt moved the wrong way, set MOTOR_INVERT (Q1)", note);
+    } else if (abs(u.counts) > 100 && abs(l.counts) > 100) {
+        st::record("motor + limit switches", st::FAIL, "%s: motor turned both ways for the whole time limit but no limit switch closed. The bolt must press SW2 at full unlock and SW1 at full lock", note);
     } else {
-        st::record("motor + limit switches", st::FAIL, "%s: no switch reached. Check L298N motor supply, ENA jumper removed, IN1/IN2/ENA wiring (Q4)", note);
+        st::record("motor + limit switches", st::FAIL, "%s: no switch reached and little movement. Check L298N motor supply, ENA jumper removed, IN1/IN2/ENA wiring (Q4)", note);
     }
 }
 

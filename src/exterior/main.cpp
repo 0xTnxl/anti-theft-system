@@ -715,7 +715,10 @@ void loop() {
     static uint32_t lastRepairMs = 0, lastErrors = 0;
     if (gOled.present() && gOled.isOn()) {
         const uint32_t errs = gOled.writeErrors();
-        if (errs != lastErrors || now - lastRepairMs >= OLED_REPAIR_MS) {
+        // Timed repairs are skipped on the tap-card screen: each one is I2C traffic
+        // on GPIO22, which resets the card reader. A failed write still repairs.
+        const bool timed = gUi != Ui::CardWait && now - lastRepairMs >= OLED_REPAIR_MS;
+        if (errs != lastErrors || timed) {
             if (errs != lastErrors)
                 Serial.printf("[oled] %lu failed I2C write(s), repairing display\n", (unsigned long)(errs - lastErrors));
             lastErrors = errs;

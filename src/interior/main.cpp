@@ -16,6 +16,14 @@
 #include "secrets_guard.h"
 #include "secure_link.h"
 
+// ATDS_SIM_BOLT (env:interior_sim): no motor at all.
+// ATDS_BENCH (env:interior_bench): real motor, but the door comes from the
+// console and a move also ends after BENCH_TRAVEL_COUNTS encoder counts, for a
+// bench without a mounted bolt, SW2 or reed. Neither build goes on a door.
+#if defined(ATDS_SIM_BOLT) || defined(ATDS_BENCH)
+#define ATDS_SIM_DOOR
+#endif
+
 namespace {
 
 // ------------------------------------------------------------- helpers ---
@@ -64,7 +72,7 @@ Debounced gSwLocked = {PIN_SW_LOCKED, SWITCH_PRESSED_LEVEL, SWITCH_DEBOUNCE_MS};
 Debounced gSwUnlocked = {PIN_SW_UNLOCKED, SWITCH_PRESSED_LEVEL, SWITCH_DEBOUNCE_MS};
 Debounced gDoorClosed = {PIN_REED, DOOR_CLOSED_LEVEL, REED_DEBOUNCE_MS};
 
-#ifdef ATDS_SIM_BOLT
+#ifdef ATDS_SIM_DOOR
 // TEST BUILD (env:interior_sim): no motor, no limit switches. A move just takes
 // SIM_BOLT_MOVE_MS. The door is set from the console ("door open|close") and the
 // SW-420 / PIR are ignored until "sensors on". Never fit this build to a door.
@@ -77,7 +85,7 @@ constexpr bool gSensorsOn = true;
 
 // Simulated build: the console sets the door instead of the reed switch.
 void simDoor(uint32_t now) {
-#ifdef ATDS_SIM_BOLT
+#ifdef ATDS_SIM_DOOR
     const bool closed = !gSimDoorOpen;
     if (gDoorClosed.stable != closed) {
         gDoorClosed.stable = gDoorClosed.raw = closed;
@@ -243,6 +251,26 @@ constexpr bool SIM_BOLT = true;
 #else
 constexpr bool SIM_BOLT = false;
 #endif
+#ifdef ATDS_SIM_DOOR
+constexpr bool SIM_DOOR = true;
+#else
+constexpr bool SIM_DOOR = false;
+#endif
+#ifdef ATDS_BENCH
+constexpr int32_t BENCH_TRAVEL_COUNTS = 2500;   // about 0.5 s of motor travel
+#endif
+
+// Bench build: has the motor turned far enough to count as end of travel?
+bool benchTravelDone() {
+#ifdef ATDS_BENCH
+    if (gMotorOn && abs(motor::count() - gMoveStartCount) >= BENCH_TRAVEL_COUNTS) {
+        Serial.printf("[lock] (bench) %ld encoder counts, treating as end of travel\n",
+                      (long)(motor::count() - gMoveStartCount));
+        return true;
+    }
+#endif
+    return false;
+}
 
 bool armedBase() { return !gDisarmed && gLock == proto::LOCK_LOCKED && gDoorClosed.stable; }
 
@@ -272,9 +300,15 @@ void updateLock(uint32_t now) {
     switch (gLock) {
         case proto::LOCK_UNLOCKING:
             // Stop on the first contact (raw), confirm with the debounced state.
-            if (gMotorOn && gSwUnlocked.raw) {
+            if (gMotorOn && (gSwUnlocked.raw || benchTravelDone())) {
+                const bool bench = !gSwUnlocked.raw;
                 motorStop(now);
-                logMove("unlock switch reached", now);
+                logMove(bench ? "unlock travel done" : "unlock switch reached", now);
+                if (bench) {
+                    gDoorOpenedSinceUnlock = !gDoorClosed.stable;
+                    setLock(proto::LOCK_UNLOCKED, now);
+                    break;
+                }
             }
             if (!gMotorOn && gSwUnlocked.stable) {
                 gDoorOpenedSinceUnlock = !gDoorClosed.stable;
@@ -311,9 +345,14 @@ void updateLock(uint32_t now) {
                 }
                 break;
             }
-            if (gMotorOn && gSwLocked.raw) {
+            if (gMotorOn && (gSwLocked.raw || benchTravelDone())) {
+                const bool bench = !gSwLocked.raw;
                 motorStop(now);
-                logMove("lock switch reached", now);
+                logMove(bench ? "lock travel done" : "lock switch reached", now);
+                if (bench) {
+                    setLock(proto::LOCK_LOCKED, now);
+                    break;
+                }
             }
             if (!gMotorOn && gSwLocked.stable) {
                 setLock(proto::LOCK_LOCKED, now);
@@ -344,7 +383,7 @@ void updateLock(uint32_t now) {
 }
 
 void bootLockState(uint32_t now) {
-#ifdef ATDS_SIM_BOLT
+#ifdef ATDS_SIM_DOOR
     setLock(proto::LOCK_LOCKED, now);   // simulated bolt starts locked, door closed
     return;
 #endif
@@ -382,7 +421,7 @@ void updateAlarmInputs(uint32_t now) {
     if (!gDisarmed && gLock == proto::LOCK_LOCKED && !gDoorClosed.stable)
         raiseAlarm(proto::ALARM_FORCED_DOOR, now);
 
-    if (BOLT_TAMPER_IS_ALARM && !SIM_BOLT && !gDisarmed && gLock == proto::LOCK_LOCKED && !gSwLocked.stable &&
+    if (BOLT_TAMPER_IS_ALARM && !SIM_DOOR && !gDisarmed && gLock == proto::LOCK_LOCKED && !gSwLocked.stable &&
         elapsed(now, gSwLocked.stableSinceMs, BOLT_TAMPER_MS))
         raiseAlarm(proto::ALARM_BOLT_TAMPER, now);
 
@@ -691,7 +730,7 @@ void runCommand(char* cmd, uint32_t now) {
         } else {
             Serial.println("type 'wipe yes' to delete every card");
         }
-#ifdef ATDS_SIM_BOLT
+#ifdef ATDS_SIM_DOOR
     } else if (!strcmp(cmd, "door") && arg && (!strcmp(arg, "open") || !strcmp(arg, "close"))) {
         gSimDoorOpen = !strcmp(arg, "open");
         Serial.printf("[sim] door %s\n", gSimDoorOpen ? "OPEN" : "closed");
@@ -758,6 +797,9 @@ void setup() {
 #ifdef ATDS_SIM_BOLT
     Serial.println("[int] TEST BUILD: SIMULATED BOLT, no motor. Console: door open|close, sensors on|off. Do not fit to a door.");
 #endif
+#ifdef ATDS_BENCH
+    Serial.println("[int] BENCH BUILD: REAL MOTOR, door from console, moves end by encoder count. Console: door open|close, sensors on|off. Do not fit to a door.");
+#endif
 
     motor::begin();
     ledcSetup(BUZZER_LEDC_CH, 2000, 10);
@@ -794,13 +836,16 @@ void setup() {
 }
 
 void loop() {
-    const uint32_t now = millis();
+    uint32_t now = millis();
     gSwLocked.update(now);
     gSwUnlocked.update(now);
-    if (!SIM_BOLT) gDoorClosed.update(now);   // simulated build: door comes from the console
+    if (!SIM_DOOR) gDoorClosed.update(now);   // simulated build: door comes from the console
     simDoor(now);
 
     serviceLink(now);
+    // serviceLink can take ~0.5 s (PIN hash) and may have started the motor:
+    // later steps must not see a time from before that.
+    now = millis();
     motorService(now);
     updateLock(now);
     updateAlarmInputs(now);

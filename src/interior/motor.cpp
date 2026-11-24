@@ -96,11 +96,13 @@ uint32_t badTransitions() { return gBad; }
 
 bool stalled(uint32_t nowMs) {
     if (!ENCODER_STALL_DETECT || gDir == Dir::Stop) return false;
-    if (nowMs - gDriveSinceMs < ENCODER_STARTUP_MS) return false;
-    // Movement since this drive started, and recently.
+    // Signed differences: a caller's "now" may be slightly older than the
+    // drive start, which must read as "just started", not as a huge interval.
+    const int32_t running = (int32_t)(nowMs - gDriveSinceMs);
+    if (running < (int32_t)ENCODER_STARTUP_MS) return false;
     const bool movedAtAll = count() != gCountAtDrive;
-    const uint32_t since = movedAtAll ? nowMs - gLastEdgeMs : nowMs - gDriveSinceMs - ENCODER_STARTUP_MS;
-    return since >= ENCODER_STALL_MS;
+    const int32_t since = movedAtAll ? (int32_t)(nowMs - gLastEdgeMs) : running - (int32_t)ENCODER_STARTUP_MS;
+    return since >= (int32_t)ENCODER_STALL_MS;
 }
 
 }  // namespace motor
