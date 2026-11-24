@@ -58,7 +58,11 @@ constexpr uint8_t BUZZER_LEDC_CH = 0;   // exterior uses no other LEDC channel
 // then only lights while the buzzer pattern plays.
 constexpr bool BUZZER_ACTIVE = false;
 constexpr bool BUZZER_ENABLED = true;
-constexpr uint32_t TAMPER_BEEP_MS = 30000;   // tamper pattern length after an alarm starts
+constexpr uint32_t TAMPER_BEEP_MS = 30000;
+// A passive piezo is loudest at its resonant frequency (often 2-4 kHz).
+// Find it with the kick test 'sweep' and put the loudest value here (Q24).
+constexpr uint16_t BUZZER_HZ = 2700;       // main tone: granted, tamper
+constexpr uint16_t BUZZER_LOW_HZ = 1800;   // "low" tone: denied, lockout, tamper alternate   // tamper pattern length after an alarm starts
 
 // ---- UI timing ------------------------------------------------------------
 constexpr uint32_t PIN_ENTRY_TIMEOUT_MS = 15000;

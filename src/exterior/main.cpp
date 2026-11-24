@@ -198,11 +198,13 @@ struct Step {
     uint16_t hz;   // 0 = silence
     uint16_t ms;
 };
-const Step BEEP_GRANTED[] = {{1800, 80}, {0, 60}, {2400, 140}};
-const Step BEEP_DENIED[] = {{400, 450}};
-const Step BEEP_LOCKOUT[] = {{400, 250}, {0, 120}, {400, 250}, {0, 120}, {400, 250}};
-const Step BEEP_TAMPER[] = {{1000, 250}, {1800, 250}};   // repeats while the alarm is new
-const Step BEEP_INFO[] = {{1500, 60}};
+// Tones stay near the piezo's resonance (BUZZER_HZ) because that is where it is
+// loud; patterns are told apart by rhythm rather than by pitch.
+const Step BEEP_GRANTED[] = {{BUZZER_HZ, 90}, {0, 70}, {BUZZER_HZ, 160}};
+const Step BEEP_DENIED[] = {{BUZZER_LOW_HZ, 700}};
+const Step BEEP_LOCKOUT[] = {{BUZZER_LOW_HZ, 250}, {0, 120}, {BUZZER_LOW_HZ, 250}, {0, 120}, {BUZZER_LOW_HZ, 250}};
+const Step BEEP_TAMPER[] = {{BUZZER_HZ, 250}, {BUZZER_LOW_HZ, 250}};   // repeats while the alarm is new
+const Step BEEP_INFO[] = {{BUZZER_HZ, 60}};
 
 const Step* gPat = nullptr;
 uint8_t gPatLen = 0, gPatIdx = 0;
@@ -228,6 +230,7 @@ void buzzerRelease() {
         ledcWriteTone(BUZZER_LEDC_CH, 0);
         ledcDetachPin(PIN_BUZZER);
         pinMode(PIN_BUZZER, OUTPUT);
+        gpio_set_drive_capability((gpio_num_t)PIN_BUZZER, GPIO_DRIVE_CAP_3);
         gBuzzerOwnsPin = false;
     }
     digitalWrite(PIN_BUZZER, LOW);
@@ -646,6 +649,8 @@ void setup() {
     pinMode(PIN_LED_YELLOW, OUTPUT);
     pinMode(PIN_LED_RED, OUTPUT);   // also the buzzer pin
     if (!BUZZER_ACTIVE) ledcSetup(BUZZER_LEDC_CH, 2000, 10);
+    // Strongest pad drive (~40 mA class) for the buzzer, which shares the pin with the LED.
+    gpio_set_drive_capability((gpio_num_t)PIN_BUZZER, GPIO_DRIVE_CAP_3);
     pinMode(PIN_ONBOARD_LED, OUTPUT);
     digitalWrite(PIN_ONBOARD_LED, LOW);
     digitalWrite(PIN_LED_YELLOW, HIGH);

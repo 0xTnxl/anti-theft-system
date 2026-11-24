@@ -99,19 +99,44 @@ void beep(uint16_t hz, uint16_t ms) {
     ledcWriteTone(BUZZER_LEDC_CH, 0);
     ledcDetachPin(PIN_BUZZER);
     pinMode(PIN_BUZZER, OUTPUT);
+    gpio_set_drive_capability((gpio_num_t)PIN_BUZZER, GPIO_DRIVE_CAP_3);
     digitalWrite(PIN_BUZZER, LOW);
+}
+
+// Active-buzzer check: steady HIGH, no tone. An active buzzer is LOUD here; a
+// passive one only clicks once at the start and end.
+void testBuzzDc() {
+    Serial.println("\n>> GPIO16 held HIGH for 2 s (no tone). Loud continuous beep = ACTIVE buzzer");
+    pinMode(PIN_BUZZER, OUTPUT);
+    gpio_set_drive_capability((gpio_num_t)PIN_BUZZER, GPIO_DRIVE_CAP_3);
+    digitalWrite(PIN_BUZZER, HIGH);
+    delay(2000);
+    digitalWrite(PIN_BUZZER, LOW);
+    st::record("buzzer type", st::CHECK, "loud steady beep = active buzzer: set BUZZER_ACTIVE = true. Only a click = passive");
+}
+
+// Plays 1000-5000 Hz in 250 Hz steps so you can hear where the buzzer is loudest.
+void testSweep() {
+    Serial.println("\n>> Listen: each step plays 0.6 s. Note the LOUDEST frequency. Type anything to stop.");
+    for (uint16_t hz = 1000; hz <= 5000; hz += 250) {
+        Serial.printf("  %u Hz\n", hz);
+        beep(hz, 600);
+        delay(250);
+        if (st::abortRequested()) break;
+    }
+    st::record("buzzer sweep", st::CHECK, "put the loudest frequency in BUZZER_HZ (config_exterior.h) and tell the developer");
 }
 
 void testBuzzer() {
     Serial.println("  buzzer: GRANTED (two rising chirps)");
-    beep(1800, 80); delay(60); beep(2400, 140);
+    beep(BUZZER_HZ, 90); delay(70); beep(BUZZER_HZ, 160);
     delay(600);
     Serial.println("  buzzer: DENIED (one low tone)");
-    beep(400, 450);
+    beep(BUZZER_LOW_HZ, 700);
     delay(600);
     Serial.println("  buzzer: TAMPER (alternating, 2 s)");
-    for (int i = 0; i < 4; i++) { beep(1000, 250); beep(1800, 250); }
-    st::record("buzzer", st::CHECK, "should have played granted (2 chirps), denied (low tone), tamper (2 s siren); red LED glows while it sounds");
+    for (int i = 0; i < 4; i++) { beep(BUZZER_HZ, 250); beep(BUZZER_LOW_HZ, 250); }
+    st::record("buzzer", st::CHECK, "should have played granted (2 chirps), denied (one long tone), tamper (2 s siren); red LED glows while it sounds");
 }
 
 // Reads a line with the internal pull-down on. An OLED module has its own
@@ -482,7 +507,7 @@ void runAuto() {
 }
 
 void help() {
-    Serial.println("commands: keys | keypins | card | oled | rows | leds | buzzer | auto | all | summary | help");
+    Serial.println("commands: keys | keypins | card | oled | rows | leds | buzzer | sweep | buzzdc | auto | all | summary | help");
 }
 
 }  // namespace
@@ -498,6 +523,7 @@ void setup() {
     pinMode(PIN_RC522_CS, OUTPUT);
     digitalWrite(PIN_RC522_CS, HIGH);
     if (!BUZZER_ACTIVE) ledcSetup(BUZZER_LEDC_CH, 2000, 10);
+    gpio_set_drive_capability((gpio_num_t)PIN_BUZZER, GPIO_DRIVE_CAP_3);
     Serial.println("\n[kick] EXTERIOR component kick test. Hardware Rev B pin map.");
     runAuto();
     help();
@@ -512,6 +538,8 @@ void loop() {
         else if (!strcmp(line, "card")) testCard();
         else if (!strcmp(line, "leds")) testLeds();
         else if (!strcmp(line, "buzzer")) testBuzzer();
+        else if (!strcmp(line, "sweep")) testSweep();
+        else if (!strcmp(line, "buzzdc")) testBuzzDc();
         else if (!strcmp(line, "oled")) testOledVisible();
         else if (!strcmp(line, "rows")) testOledRows();
         else if (!strcmp(line, "auto")) { runAuto(); return; }
