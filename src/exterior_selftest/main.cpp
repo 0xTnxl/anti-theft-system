@@ -85,6 +85,35 @@ void testLeds() {
     st::record("LEDs", st::CHECK, "green (GPIO4), yellow (GPIO17), red (GPIO16) should each have lit once, in that order");
 }
 
+// Buzzer on GPIO16 (shared with the red LED): the three production patterns.
+void beep(uint16_t hz, uint16_t ms) {
+    if (BUZZER_ACTIVE) {
+        digitalWrite(PIN_BUZZER, HIGH);
+        delay(ms);
+        digitalWrite(PIN_BUZZER, LOW);
+        return;
+    }
+    ledcAttachPin(PIN_BUZZER, BUZZER_LEDC_CH);
+    ledcWriteTone(BUZZER_LEDC_CH, hz);
+    delay(ms);
+    ledcWriteTone(BUZZER_LEDC_CH, 0);
+    ledcDetachPin(PIN_BUZZER);
+    pinMode(PIN_BUZZER, OUTPUT);
+    digitalWrite(PIN_BUZZER, LOW);
+}
+
+void testBuzzer() {
+    Serial.println("  buzzer: GRANTED (two rising chirps)");
+    beep(1800, 80); delay(60); beep(2400, 140);
+    delay(600);
+    Serial.println("  buzzer: DENIED (one low tone)");
+    beep(400, 450);
+    delay(600);
+    Serial.println("  buzzer: TAMPER (alternating, 2 s)");
+    for (int i = 0; i < 4; i++) { beep(1000, 250); beep(1800, 250); }
+    st::record("buzzer", st::CHECK, "should have played granted (2 chirps), denied (low tone), tamper (2 s siren); red LED glows while it sounds");
+}
+
 // Reads a line with the internal pull-down on. An OLED module has its own
 // pull-up resistors (about 4.7-10k), which win against the ~45k pull-down, so a
 // HIGH reading means a powered module is on that pin.
@@ -217,6 +246,65 @@ void testKeypadIdle() {
         st::record("keypad (idle)", st::FAIL, "key '%c' reads pressed with nothing touched: stuck key, short, or row/column wiring", stuck);
     else
         st::record("keypad (idle)", st::CHECK, "no stuck keys. A missing keypad also looks like this: run 'keys'");
+}
+
+// Wire tester: finds which two of the 8 keypad wires each key press connects,
+// whatever the keypad's pin order. Each pin is driven LOW in turn, the other 7
+// are read with pull-ups.
+const char* kpName(uint8_t i) {
+    static char buf[8][12];
+    snprintf(buf[i], sizeof(buf[i]), "%s%u(GPIO%u)", i < 4 ? "R" : "C", (i & 3) + 1,
+             i < 4 ? PIN_KP_ROWS[i] : PIN_KP_COLS[i - 4]);
+    return buf[i];
+}
+
+uint8_t kpPin(uint8_t i) { return i < 4 ? PIN_KP_ROWS[i] : PIN_KP_COLS[i - 4]; }
+
+// Returns the first connected pair (a < b) as a * 8 + b, or -1.
+int kpConnectedPair() {
+    for (uint8_t i = 0; i < 8; i++) pinMode(kpPin(i), INPUT_PULLUP);
+    int found = -1;
+    for (uint8_t i = 0; i < 8 && found < 0; i++) {
+        pinMode(kpPin(i), OUTPUT);
+        digitalWrite(kpPin(i), LOW);
+        delayMicroseconds(50);
+        for (uint8_t j = i + 1; j < 8; j++)
+            if (digitalRead(kpPin(j)) == LOW) { found = i * 8 + j; break; }
+        pinMode(kpPin(i), INPUT_PULLUP);
+    }
+    return found;
+}
+
+void testKeyPins() {
+    showOled("KEYPAD WIRES", "PRESS KEYS");
+    const int idle = kpConnectedPair();
+    if (idle >= 0)
+        Serial.printf("  !! with no key pressed, %s and %s are connected: short or a key stuck down\n",
+                      kpName(idle / 8), kpName(idle % 8));
+    Serial.println("\n>> Press each key once, slowly, in label order 1 2 3 A 4 5 6 B 7 8 9 C * 0 # D (90 s).");
+    Serial.println("   Each press prints the two wires it connects. Type anything to stop.");
+    int last = idle;
+    uint8_t presses = 0;
+    const uint32_t t0 = millis();
+    while (millis() - t0 < 90000) {
+        const int p = kpConnectedPair();
+        if (p != last && p >= 0) {
+            const uint8_t a = p / 8, b = p % 8;
+            presses++;
+            if (a < 4 && b >= 4)
+                Serial.printf("  press %2u: %s + %s  (current map reads this as '%c')\n", presses, kpName(a),
+                              kpName(b), KEYMAP[a][b - 4]);
+            else
+                Serial.printf("  press %2u: %s + %s  (two %s: the current pin map cannot read this key)\n",
+                              presses, kpName(a), kpName(b), a < 4 ? "row pins" : "column pins");
+        }
+        last = p;
+        if (st::abortRequested()) break;
+        delay(10);
+    }
+    for (uint8_t i = 0; i < 8; i++) pinMode(kpPin(i), INPUT);
+    st::record("keypad wires", st::CHECK, "%u presses seen. Send the press list to the developer to fix the pin order", presses);
+    showOkScreen();
 }
 
 void testKeys() {
@@ -386,6 +474,7 @@ void runAuto() {
     Serial.println("\n---- automatic checks ----");
     st::testRadio();
     testLeds();
+    testBuzzer();
     testOled();
     testRc522();
     testKeypadIdle();
@@ -393,7 +482,7 @@ void runAuto() {
 }
 
 void help() {
-    Serial.println("commands: keys | card | oled | rows | leds | auto | all | summary | help");
+    Serial.println("commands: keys | keypins | card | oled | rows | leds | buzzer | auto | all | summary | help");
 }
 
 }  // namespace
@@ -408,6 +497,7 @@ void setup() {
     gKeypad.end();   // all keypad pins high impedance
     pinMode(PIN_RC522_CS, OUTPUT);
     digitalWrite(PIN_RC522_CS, HIGH);
+    if (!BUZZER_ACTIVE) ledcSetup(BUZZER_LEDC_CH, 2000, 10);
     Serial.println("\n[kick] EXTERIOR component kick test. Hardware Rev B pin map.");
     runAuto();
     help();
@@ -418,8 +508,10 @@ void loop() {
     marqueeStep();
     if (st::readLine(line, sizeof(line))) {
         if (!strcmp(line, "keys")) testKeys();
+        else if (!strcmp(line, "keypins")) testKeyPins();
         else if (!strcmp(line, "card")) testCard();
         else if (!strcmp(line, "leds")) testLeds();
+        else if (!strcmp(line, "buzzer")) testBuzzer();
         else if (!strcmp(line, "oled")) testOledVisible();
         else if (!strcmp(line, "rows")) testOledRows();
         else if (!strcmp(line, "auto")) { runAuto(); return; }

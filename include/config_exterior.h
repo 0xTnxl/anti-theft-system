@@ -48,6 +48,18 @@ constexpr uint8_t PIN_LED_GREEN = 4;
 constexpr uint8_t PIN_LED_YELLOW = 17;
 constexpr uint8_t PIN_LED_RED = 16;
 
+// ---- Buzzer (bench addition, on the same GPIO16 as the red LED) -----------
+// Buzzer + to GPIO16 (bridged with the red LED's resistor), buzzer - to GND.
+// Because the pin is shared, the red LED glows while a tone plays.
+constexpr uint8_t PIN_BUZZER = 16;
+constexpr uint8_t BUZZER_LEDC_CH = 0;   // exterior uses no other LEDC channel
+// TBC (Q24): passive buzzer (needs a tone) or active buzzer (beeps on any HIGH).
+// With an ACTIVE buzzer, every steady red LED would also sound, so the red LED
+// then only lights while the buzzer pattern plays.
+constexpr bool BUZZER_ACTIVE = false;
+constexpr bool BUZZER_ENABLED = true;
+constexpr uint32_t TAMPER_BEEP_MS = 30000;   // tamper pattern length after an alarm starts
+
 // ---- UI timing ------------------------------------------------------------
 constexpr uint32_t PIN_ENTRY_TIMEOUT_MS = 15000;
 constexpr uint32_t VERIFY_TIMEOUT_MS = 3000;

@@ -191,6 +191,80 @@ void render(uint32_t now) {
                       (unsigned long)gOled.lastCommitMs(), (unsigned long)gOled.writeErrors());
 }
 
+// ---------------------------------------------------------------- buzzer ---
+// Non-blocking tone patterns on GPIO16. While a pattern plays the buzzer owns
+// the pin (LEDC tone), afterwards it goes back to the red LED.
+struct Step {
+    uint16_t hz;   // 0 = silence
+    uint16_t ms;
+};
+const Step BEEP_GRANTED[] = {{1800, 80}, {0, 60}, {2400, 140}};
+const Step BEEP_DENIED[] = {{400, 450}};
+const Step BEEP_LOCKOUT[] = {{400, 250}, {0, 120}, {400, 250}, {0, 120}, {400, 250}};
+const Step BEEP_TAMPER[] = {{1000, 250}, {1800, 250}};   // repeats while the alarm is new
+const Step BEEP_INFO[] = {{1500, 60}};
+
+const Step* gPat = nullptr;
+uint8_t gPatLen = 0, gPatIdx = 0;
+uint32_t gPatStepMs = 0;
+bool gPatLoop = false;
+uint32_t gTamperUntil = 0;
+bool gBuzzerOwnsPin = false;
+
+void buzzerTone(uint16_t hz) {
+    if (BUZZER_ACTIVE) {
+        digitalWrite(PIN_BUZZER, hz ? HIGH : LOW);
+        return;
+    }
+    if (!gBuzzerOwnsPin) {
+        ledcAttachPin(PIN_BUZZER, BUZZER_LEDC_CH);
+        gBuzzerOwnsPin = true;
+    }
+    ledcWriteTone(BUZZER_LEDC_CH, hz);
+}
+
+void buzzerRelease() {
+    if (gBuzzerOwnsPin) {
+        ledcWriteTone(BUZZER_LEDC_CH, 0);
+        ledcDetachPin(PIN_BUZZER);
+        pinMode(PIN_BUZZER, OUTPUT);
+        gBuzzerOwnsPin = false;
+    }
+    digitalWrite(PIN_BUZZER, LOW);
+}
+
+template <size_t N>
+void play(const Step (&pat)[N], bool loop = false) {
+    if (!BUZZER_ENABLED) return;
+    gPat = pat;
+    gPatLen = N;
+    gPatIdx = 0;
+    gPatLoop = loop;
+    gPatStepMs = millis();
+    buzzerTone(pat[0].hz);
+}
+
+void stopBuzzer() {
+    gPat = nullptr;
+    buzzerRelease();
+}
+
+bool buzzerBusy() { return gPat != nullptr; }
+
+void serviceBuzzer(uint32_t now) {
+    if (gPatLoop && (int32_t)(now - gTamperUntil) >= 0) stopBuzzer();
+    if (!gPat || now - gPatStepMs < gPat[gPatIdx].ms) return;
+    gPatStepMs = now;
+    if (++gPatIdx >= gPatLen) {
+        if (!gPatLoop) {
+            stopBuzzer();
+            return;
+        }
+        gPatIdx = 0;
+    }
+    buzzerTone(gPat[gPatIdx].hz);
+}
+
 void updateLeds(uint32_t now) {
     const bool blinkFast = (now / 125) & 1;
     const bool blinkSlow = (now / 500) & 1;
@@ -216,7 +290,9 @@ void updateLeds(uint32_t now) {
     digitalWrite(PIN_ONBOARD_LED, ident && blinkSlow);
     digitalWrite(PIN_LED_GREEN, g);
     digitalWrite(PIN_LED_YELLOW, y);
-    digitalWrite(PIN_LED_RED, r);
+    // GPIO16 is shared with the buzzer: leave it alone while a tone plays. An
+    // active buzzer would sound on any steady HIGH, so then red stays off.
+    if (!buzzerBusy()) digitalWrite(PIN_LED_RED, BUZZER_ACTIVE ? LOW : r);
 }
 
 void showResult(const char* l1, const char* l2, Tone tone, uint32_t ms, uint32_t now) {
@@ -258,13 +334,16 @@ void onAuthResult(const proto::AuthResult& r, uint32_t now) {
     char buf[22];
     switch (r.code) {
         case proto::AUTH_GRANTED:
+            play(BEEP_GRANTED);
             showResult("ACCESS GRANTED", "WELCOME", Tone::Ok, RESULT_OK_MS, now);
             break;
         case proto::AUTH_DENIED:
+            play(BEEP_DENIED);
             snprintf(buf, sizeof(buf), "%u TRIES LEFT", r.attemptsLeft);
             showResult(buf, "DENIED", Tone::Fail, RESULT_FAIL_MS, now);
             break;
         case proto::AUTH_LOCKED_OUT:
+            play(BEEP_LOCKOUT);
             gLockoutUntil = now + (uint32_t)r.lockoutS * 1000;
             setUi(Ui::Lockout, now);
             break;
@@ -272,12 +351,15 @@ void onAuthResult(const proto::AuthResult& r, uint32_t now) {
             showResult("TRY AGAIN", "BUSY", Tone::Info, RESULT_FAIL_MS, now);
             break;
         case proto::AUTH_ENROLL_AGAIN:
+            play(BEEP_INFO);
             showResult("SAME CARD + PIN", "REPEAT", Tone::Info, RESULT_OK_MS, now);
             break;
         case proto::AUTH_ENROLL_OK:
+            play(BEEP_GRANTED);
             showResult("CARD ENROLLED", "SAVED", Tone::Ok, RESULT_OK_MS, now);
             break;
         case proto::AUTH_ENROLL_FAIL:
+            play(BEEP_DENIED);
             showResult("ENROLL FAILED", "ERROR", Tone::Fail, RESULT_FAIL_MS, now);
             break;
         default:
@@ -298,6 +380,15 @@ void onMessage(const slink::RxResult& r, uint32_t now) {
             gAwaitConfirm = false;
             if (memcmp(&s, &gStatus, sizeof(s)) != 0) {
                 Serial.printf("[status] lock=%u alarm=%u flags=0x%02X\n", s.lock, s.alarm, s.flags);
+                // Tamper notification: interior raised an alarm (forced door, vibration,
+                // motion, link or RF tamper, bolt tamper). Cleared alarm stops it.
+                if (s.alarm != proto::ALARM_NONE && gStatus.alarm == proto::ALARM_NONE) {
+                    Serial.printf("[buzzer] tamper alarm %u\n", s.alarm);
+                    gTamperUntil = millis() + TAMPER_BEEP_MS;
+                    play(BEEP_TAMPER, true);
+                } else if (s.alarm == proto::ALARM_NONE && gStatus.alarm != proto::ALARM_NONE && gPatLoop) {
+                    stopBuzzer();
+                }
                 gStatus = s;
                 if (gUi == Ui::CardWait) gUiDirty = true;
             }
@@ -553,7 +644,8 @@ void setup() {
 
     pinMode(PIN_LED_GREEN, OUTPUT);
     pinMode(PIN_LED_YELLOW, OUTPUT);
-    pinMode(PIN_LED_RED, OUTPUT);
+    pinMode(PIN_LED_RED, OUTPUT);   // also the buzzer pin
+    if (!BUZZER_ACTIVE) ledcSetup(BUZZER_LEDC_CH, 2000, 10);
     pinMode(PIN_ONBOARD_LED, OUTPUT);
     digitalWrite(PIN_ONBOARD_LED, LOW);
     digitalWrite(PIN_LED_YELLOW, HIGH);
@@ -611,6 +703,7 @@ void loop() {
 
     // While asleep in CardWait, only wake the display for a state change.
     if (gUi != Ui::CardWait || gOled.isOn() || gUiDirty) render(now);
+    serviceBuzzer(now);
     updateLeds(now);
     delay(1);
 }

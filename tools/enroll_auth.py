@@ -75,6 +75,14 @@ def main():
                 raise Fail(f"no PIN submitted within {WAIT} s ({keys} key presses detected"
                            f"{': keypad not read, run the exterior kick test keys check' if not keys else ''})")
             time.sleep(0.05)
+        # The interior logs its reason just after answering: show it.
+        end2 = time.time() + 1.5
+        while time.time() < end2:
+            for line in intr.lines[iseen:]:
+                if line.startswith(("[enroll]", "[auth]", "[lock]", "[alarm]")):
+                    print(f"      interior: {line}", flush=True)
+            iseen = len(intr.lines)
+            time.sleep(0.05)
         drops = len(ext.find(r"RC522 not responding", me))
         return r[1], int(r[2]), time.time() - t0, drops
 
