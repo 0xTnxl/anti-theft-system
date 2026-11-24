@@ -710,5 +710,19 @@ void loop() {
     if (gUi != Ui::CardWait || gOled.isOn() || gUiDirty) render(now);
     serviceBuzzer(now);
     updateLeds(now);
+
+    // OLED self-repair (glitches on the bench wiring).
+    static uint32_t lastRepairMs = 0, lastErrors = 0;
+    if (gOled.present() && gOled.isOn()) {
+        const uint32_t errs = gOled.writeErrors();
+        if (errs != lastErrors || now - lastRepairMs >= OLED_REPAIR_MS) {
+            if (errs != lastErrors)
+                Serial.printf("[oled] %lu failed I2C write(s), repairing display\n", (unsigned long)(errs - lastErrors));
+            lastErrors = errs;
+            lastRepairMs = now;
+            gOled.repair();
+            lastErrors = gOled.writeErrors();
+        }
+    }
     delay(1);
 }

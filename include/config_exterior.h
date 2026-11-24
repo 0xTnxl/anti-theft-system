@@ -42,6 +42,10 @@ constexpr uint32_t OLED_I2C_HZ = 100000;   // 400 kHz failed on the bench wiring
 constexpr bool OLED_FLIP = false;     // rotate 180 degrees
 constexpr uint8_t OLED_COL_OFFSET = 0;   // 0 = SSD1306, 2 = SH1106 (find out with kick test 'oled')
 constexpr uint32_t OLED_SLEEP_MS = 30000;
+// Self-repair: resend the OLED setup and the full frame this often, and at once
+// after a failed I2C write. Each repair resets the RC522 (shared GPIO22), which
+// the card poll already handles.
+constexpr uint32_t OLED_REPAIR_MS = 5000;
 
 // ---- LEDs (active high) ---------------------------------------------------
 constexpr uint8_t PIN_LED_GREEN = 4;

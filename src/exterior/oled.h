@@ -27,10 +27,13 @@ public:
     // Called between I2C transfers in commit(), so the keypad keeps being scanned
     // while the screen is redrawn.
     void setIdleHook(void (*hook)()) { idle_ = hook; }
+    // Resends the controller setup and the whole frame (clears glitches).
+    void repair();
     uint32_t lastCommitMs() const { return lastCommitMs_; }   // duration of the last redraw
 
 private:
     void cmds(const uint8_t* c, uint8_t n);
+    void sendInit(bool displayOffFirst);
     void pixel(int x, int y);
 
     uint8_t addr_ = 0x3C;
@@ -42,6 +45,7 @@ private:
     uint32_t writeErrors_ = 0;
     void (*idle_)() = nullptr;
     uint32_t lastCommitMs_ = 0;
+    bool flip_ = false;
     uint8_t buf_[W * H / 8] = {};
     uint8_t sent_[W * H / 8] = {};
 };

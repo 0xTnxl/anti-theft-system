@@ -21,9 +21,22 @@ bool Oled::begin(uint8_t sda, uint8_t scl, uint8_t addr, uint32_t hz, bool flip)
     }
     lastBusMs_ = millis();
     if (!present_) return false;
+    flip_ = flip;
+    sendInit(true);
+    on_ = true;
+    sentValid_ = false;
+    clear();
+    commit();
+    return true;
+}
 
+// Full controller setup. A supply dip or a garbled transfer can leave the panel
+// with wrong settings (shifted, mirrored, dim); repair() sends this again.
+void Oled::sendInit(bool displayOffFirst) {
+    const bool flip = flip_;
+    const uint8_t off = 0xAE;
+    if (displayOffFirst) cmds(&off, 1);
     const uint8_t init[] = {
-        0xAE,                  // display off
         0xD5, 0x80,            // clock divide
         0xA8, 0x1F,            // multiplex 32
         0xD3, 0x00,            // display offset
@@ -42,11 +55,13 @@ bool Oled::begin(uint8_t sda, uint8_t scl, uint8_t addr, uint32_t hz, bool flip)
         0xAF,                  // display on
     };
     cmds(init, sizeof(init));
-    on_ = true;
-    sentValid_ = false;
-    clear();
+}
+
+void Oled::repair() {
+    if (!present_ || !on_) return;
+    sendInit(false);       // no display-off first, so the screen does not blink
+    sentValid_ = false;    // next commit() resends every page
     commit();
-    return true;
 }
 
 void Oled::cmds(const uint8_t* c, uint8_t n) {
