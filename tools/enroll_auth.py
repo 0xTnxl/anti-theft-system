@@ -83,10 +83,21 @@ def main():
         mi, me = intr.mark(), ext.mark()
         intr.reset()
         ext.reset()
-        intr.expect(r"\[int\] anti-theft interior module", 10, mi)
+        try:
+            intr.expect(r"\[int\] anti-theft interior module", 10, mi)
+        except Fail:
+            other = intr.find(r"\[kick\]", mi)
+            raise Fail("interior is running the kick test, not the interior firmware. Flash it first:\n"
+                       "    pio run -e interior_sim -t upload --upload-port $(python3 tools/find_port.py interior)"
+                       if other else "no interior firmware banner: is env:interior_sim (or env:interior) flashed?")
         time.sleep(1)
         sim = bool(intr.find(r"SIMULATED BOLT", mi))
         intr.expect(r"\[link\] session established", 20, mi)
+        try:
+            ext.expect(r"\[ext\] anti-theft exterior module", 10, me)
+        except Fail:
+            raise Fail("exterior is not running env:exterior (kick test or other build?). Flash it:\n"
+                       "    pio run -e exterior -t upload --upload-port $(python3 tools/find_port.py exterior)")
         ext.expect(r"\[link\] session confirmed", 20, me)
         ext.expect(r"Linking -> CardWait", 10, me)
         oled = not ext.find(r"SSD1306 not found", me)

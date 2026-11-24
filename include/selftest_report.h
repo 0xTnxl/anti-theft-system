@@ -69,19 +69,35 @@ inline bool abortRequested() {
     return true;
 }
 
+// Reads one command line. Keeps printable ASCII only (drops stray bytes from
+// the USB adapter and terminal control codes), trims spaces, lower-cases.
 inline bool readLine(char* buf, size_t cap) {
     static size_t len = 0;
     while (Serial.available()) {
         const char c = (char)Serial.read();
         if (c == '\r' || c == '\n') {
+            while (len && buf[len - 1] == ' ') len--;
             if (!len) continue;
             buf[len] = 0;
             len = 0;
             return true;
         }
-        if (len < cap - 1) buf[len++] = c;
+        if (c == 0x08 || c == 0x7F) {   // backspace
+            if (len) len--;
+            continue;
+        }
+        if (c < 0x20 || c > 0x7E) continue;
+        if (c == ' ' && len == 0) continue;
+        if (len < cap - 1) buf[len++] = (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c;
     }
     return false;
+}
+
+// For unrecognised commands: shows exactly what arrived.
+inline void unknownCommand(const char* line) {
+    Serial.printf("unknown command '%s' (%u chars, hex:", line, (unsigned)strlen(line));
+    for (const char* p = line; *p; p++) Serial.printf(" %02X", (uint8_t)*p);
+    Serial.println(")");
 }
 
 // Radio wake-up: start WiFi, scan once, turn it off again.

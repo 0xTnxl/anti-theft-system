@@ -402,7 +402,8 @@ void loop() {
         else if (!strcmp(line, "auto")) { runAuto(); return; }
         else if (!strcmp(line, "all")) { runAuto(); testSwitches(); testEncoder(); testVibration(); testMotion(); }
         else if (!strcmp(line, "summary")) {}
-        else { help(); return; }
+        else if (!strcmp(line, "help")) { help(); return; }
+        else { st::unknownCommand(line); help(); return; }
         st::summary();
     }
     delay(5);
