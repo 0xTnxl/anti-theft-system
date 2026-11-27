@@ -23,6 +23,8 @@
 #include "rtc.h"
 #include "secrets_guard.h"
 #include "secure_link.h"
+#include "ota.h"
+#include "version.h"
 #include "web.h"
 
 // ATDS_SIM_BOLT (env:interior_sim): no motor at all, a virtual encoder.
@@ -1210,6 +1212,57 @@ void serviceConsole(uint32_t now) {
     }
 }
 
+// ----------------------------------------------------------------- OTA ---
+// A freshly installed image is "pending": it confirms itself after running
+// healthily for OTA_CONFIRM_MS. If it crashes, or loop() stalls for 30 s, the
+// board restarts before that and the bootloader returns to the old firmware.
+constexpr uint32_t OTA_CONFIRM_MS = 60000;
+volatile uint32_t gLoopBeat = 0;
+bool gOtaPending = false;
+uint32_t gRebootAt = 0;
+
+void otaWatch(TimerHandle_t) {
+    static uint32_t last = 0, stuck = 0;
+    if (!gOtaPending) return;
+    stuck = gLoopBeat == last ? stuck + 1 : 0;
+    last = gLoopBeat;
+    if (stuck >= 6) {   // 6 x 5 s without a loop pass
+        Serial.println("[ota] new firmware stalled: restarting to roll back");
+        esp_restart();
+    }
+}
+
+void otaBoot() {
+    uint32_t failed = 0;
+    if (ota::rolledBack(&failed)) {
+        Serial.printf("[ota] the update to v%lu did not start properly: back on v%d\n", (unsigned long)failed, ATDS_FW_VERSION);
+        evlog::append(evlog::EV_OTA_ROLLED_BACK, evlog::NO_SLOT, 0, failed, ATDS_FW_VERSION);
+    }
+    gOtaPending = ota::pendingVerify();
+    Serial.printf("[ota] firmware v%d%s\n", ATDS_FW_VERSION, gOtaPending ? ": new, confirming after 60 s of healthy running" : "");
+    if (gOtaPending) {
+        TimerHandle_t t = xTimerCreate("otawatch", pdMS_TO_TICKS(5000), pdTRUE, nullptr, otaWatch);
+        if (t) xTimerStart(t, 0);
+    }
+}
+
+void otaService(uint32_t now) {
+    if (gOtaPending && now >= OTA_CONFIRM_MS && (gLink.established(now) || now >= 3 * OTA_CONFIRM_MS)) {
+        gOtaPending = false;
+        ota::confirm();
+        evlog::append(evlog::EV_OTA_CONFIRMED, evlog::NO_SLOT, 0, ATDS_FW_VERSION);
+        Serial.printf("[ota] firmware v%d confirmed\n", ATDS_FW_VERSION);
+    }
+    if (web::rebootRequested() && !gRebootAt) gRebootAt = (now + 2000) | 1;   // let the reply reach the phone
+    if (gRebootAt && (int32_t)(now - gRebootAt) >= 0 && !gMotorOn && !gHoldOn &&
+        gLock != proto::LOCK_UNLOCKING && gLock != proto::LOCK_LOCKING && gLock != proto::LOCK_RELEASING) {
+        Serial.println("[ota] restarting into the new firmware");
+        Serial.flush();
+        motor::coast();
+        ESP.restart();
+    }
+}
+
 }  // namespace
 
 void setup() {
@@ -1259,6 +1312,7 @@ void setup() {
     }
 
     web::loadCredentials();
+    web::lock();   // the HTTPS task waits until setup has finished
     if (!espnow::begin(ATDS_MAC_INTERIOR, ATDS_MAC_EXTERIOR, ESPNOW_CHANNEL, 0, web::apSsid(), web::apPass())) {
         Serial.println("[int] ESP-NOW init failed, restarting in 5 s");
         delay(5000);
@@ -1272,9 +1326,22 @@ void setup() {
     gDoorWasClosed = gDoorClosed.stable;
     bootLockState(millis());
     Serial.printf("[int] PIR warm-up: intrusion input ignored for %lu s\n", (unsigned long)(PIR_WARMUP_MS / 1000));
+    otaBoot();
+    web::unlock();
 }
 
+void loopBody();
+
 void loop() {
+    web::lock();   // the HTTPS task touches the door state only between loop passes
+    loopBody();
+    gLoopBeat++;
+    web::unlock();
+    web::service();   // setup page on port 80
+    delay(1);
+}
+
+void loopBody() {
     uint32_t now = millis();
     gSwLocked.update(now);
     gSwLatch.update(now);
@@ -1301,10 +1368,9 @@ void loop() {
         gStatusDirty = true;
         gStatusDirtyFwd = false;
     }
-    web::service(gMotorOn);   // no web work while the motor is driving
     updateOutputs(now);
     serviceConsole(now);
-    delay(1);
+    otaService(now);
 }
 
 // ------------------------------------------------------ dashboard (web) ---
@@ -1331,7 +1397,7 @@ void statusJson(String& out) {
              "{\"lock\":\"%s\",\"position\":%.2f,\"door\":\"%s\",\"sw1\":%d,\"sw2\":%d,\"armed\":%d,\"disarmed\":%d,"
              "\"motor\":\"%s\",\"alarm\":\"%s\",\"link\":%s,\"lastRx\":%lu,\"cards\":%u,\"maxCards\":%u,\"pinSet\":%s,"
              "\"fails\":%lu,\"lockout\":%u,\"adminMode\":\"%s\",\"phonePin\":%lu,\"logCount\":%lu,\"logHead\":%lu,"
-             "\"time\":%lu,\"rtc\":%u,\"uptime\":%lu,\"boot\":%lu,\"vibration\":%d,\"motion\":%d,\"build\":\"%s\"}",
+             "\"time\":%lu,\"rtc\":%u,\"uptime\":%lu,\"boot\":%lu,\"fw\":%d,\"vibration\":%d,\"motion\":%d,\"build\":\"%s\"}",
              lockName(gLock), (double)rel() / COUNTS_PER_TURN, gDoorClosed.stable ? "closed" : "open", gSwLocked.stable,
              gSwLatch.stable, gArmedPrev, gDisarmed, gMotorOn ? "running" : gHoldOn ? "holding" : "off",
              alarmName(gAlarm), gLink.established(now) ? "true" : "false", (unsigned long)((now - gLastRxMs) / 1000),
@@ -1339,7 +1405,7 @@ void statusJson(String& out) {
              lockoutLeftS(now), gAdmin == Admin::Enroll ? "enroll" : gAdmin == Admin::SetPin ? "setpin" : "none",
              (unsigned long)(phonePinActive(now) ? (gPhonePinUntil - now + 999) / 1000 : 0),
              (unsigned long)evlog::count(), (unsigned long)evlog::headSeq(), (unsigned long)t, st,
-             (unsigned long)(now / 1000), (unsigned long)evlog::bootCount(), intrusion::vibrationActive(), intrusion::motionActive(), buildName());
+             (unsigned long)(now / 1000), (unsigned long)evlog::bootCount(), ATDS_FW_VERSION, intrusion::vibrationActive(), intrusion::motionActive(), buildName());
     out = b;
 }
 
@@ -1457,6 +1523,15 @@ bool setPhonePin(const char* pin, String& msg) {
     evlog::append(evlog::EV_PHONE_PIN);
     Serial.println("[phone] PIN received from the dashboard, waiting for card + # (60 s)");
     msg = "PIN ready: tap your card at the door and press # within 60 s";
+    return true;
+}
+
+bool updateAllowed(String& msg) {
+    if (gMotorOn || gHoldOn || gLock == proto::LOCK_UNLOCKING || gLock == proto::LOCK_LOCKING ||
+        gLock == proto::LOCK_RELEASING || gLock == proto::LOCK_HOLDING) {
+        msg = "wait until the lock has stopped moving";
+        return false;
+    }
     return true;
 }
 

@@ -196,7 +196,8 @@ const char* eventName(uint8_t e) {
                               "FAULT",      "CARD_ADDED",   "CARD_REMOVED",  "PIN_CHANGED",   "WIPE",
                               "TIME_SET",   "CLOCK_JUMP",   "CLOCK_BACKWARDS", "TIME_INVALID", "LOG_ROLLBACK",
                               "LOG_REPAIRED", "LOCKOUT_RESET", "LATCH_RELEASED", "WEB_LOGIN", "WEB_LOGIN_FAIL",
-                              "PHONE_PIN",  "WEB_ACTION"};
+                              "PHONE_PIN",  "WEB_ACTION",   "OTA_START",     "OTA_INSTALLED", "OTA_FAIL",
+                              "OTA_CONFIRMED", "OTA_ROLLED_BACK"};
     return e < sizeof(n) / sizeof(n[0]) ? n[e] : "?";
 }
 

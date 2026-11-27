@@ -51,6 +51,11 @@ enum Event : uint8_t {
     EV_WEB_LOGIN_FAIL = 29,  // arg1 = consecutive failures
     EV_PHONE_PIN = 30,       // a PIN was entered on the dashboard (not its value)
     EV_WEB_ACTION = 31,      // detail = WebAction
+    EV_OTA_START = 32,       // arg1 = version being installed
+    EV_OTA_INSTALLED = 33,   // arg1 = version, restart follows
+    EV_OTA_FAIL = 34,        // detail 1 = rejected (signature/version/target), 2 = transfer/verify; arg1 = version
+    EV_OTA_CONFIRMED = 35,   // new firmware ran healthily; arg1 = version
+    EV_OTA_ROLLED_BACK = 36, // the update did not survive and the old firmware returned; arg1 = failed version
 };
 
 enum RtcState : uint8_t { RTC_NONE = 0, RTC_OK = 1, RTC_LOST_POWER = 2, RTC_ERROR = 3 };

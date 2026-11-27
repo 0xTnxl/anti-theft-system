@@ -8,3 +8,8 @@ anti-theft-2.png
 
 # Flow test session logs
 flow_test_*.log
+# HTTPS certificates and OTA signing key. Never commit.
+keys/
+include/tls_secrets.h
+include/ota_pubkey.h
+*.atds
