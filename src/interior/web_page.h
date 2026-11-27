@@ -313,7 +313,7 @@ function when(e){const a=ageSec(e);if(a==null)return'before the door last restar
   return d.toLocaleDateString([],{weekday:'long',day:'numeric',month:'long'})+' at '+clock(d)}
  const h=Math.round(a/3600);return h<48?h+(h==1?' hour':' hours')+' ago':Math.round(h/24)+' days ago'}
 function isToday(e){const a=ageSec(e);if(a==null)return false;if(e.st==1&&S.rtc==1)return new Date(e.t*1000).toDateString()==new Date(S.time*1000).toDateString();return a<86400}
-const scope=()=>S&&S.rtc==1?'today':'in the last day';
+const scope=()=>S&&S.rtc==1?'today':'over the last day';
 function dayGroup(e){const a=ageSec(e);if(a==null)return'Before the last restart';
  if(e.st==1&&S.rtc==1){const d=new Date(e.t*1000),n=new Date(S.time*1000),y=new Date(n);y.setDate(n.getDate()-1);
   if(d.toDateString()==n.toDateString())return'Today';if(d.toDateString()==y.toDateString())return'Yesterday';return d.toLocaleDateString([],{weekday:'long',day:'numeric',month:'long'})}
