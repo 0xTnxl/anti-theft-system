@@ -18,6 +18,10 @@ void service(bool busy);    // call every loop; skipped while the motor is drivi
 void printCredentials();    // console 'wifi'
 bool setApPass(const char* p);    // takes effect after a reboot
 bool setAdminPass(const char* p);
+// Card nicknames shown on the dashboard ("Grandma"). Letters, digits, space ' - . only, max 20.
+void cardName(uint8_t slot, char* out, size_t cap);
+void forgetName(uint8_t slot);
+void forgetAllNames();
 
 }  // namespace web
 

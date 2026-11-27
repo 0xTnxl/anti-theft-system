@@ -294,6 +294,7 @@ uint32_t now(uint8_t* state) {
 }
 
 uint32_t headSeq() { return gHead.seq; }
+uint32_t bootCount() { return gBoot; }
 
 uint32_t count() {
     if (!gReady) return 0;

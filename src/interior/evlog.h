@@ -78,7 +78,8 @@ static_assert(sizeof(Record) == 48, "log record");
 constexpr uint8_t NO_SLOT = 0xFF;
 
 enum WebAction : uint8_t { WA_LOCK = 1, WA_CLEAR = 2, WA_RESET_LOCKOUT = 3, WA_ENROLL = 4, WA_SETPIN = 5,
-                           WA_DELETE = 6, WA_TIME = 7, WA_PASSWORD = 8, WA_CANCEL = 9 };
+                           WA_DELETE = 6, WA_TIME = 7, WA_PASSWORD = 8, WA_CANCEL = 9,
+                           WA_NAME = 10 };
 
 // Newest `lastN` records, oldest first.
 typedef void (*RecordFn)(const Record& r, void* ctx);
@@ -93,6 +94,7 @@ uint32_t now(uint8_t* state);         // current RTC time as logged
 
 uint32_t count();                     // retained records
 uint32_t headSeq();
+uint32_t bootCount();                 // this power-up's boot number
 // Walks the whole retained chain. Returns true if it is intact. *checked =
 // records verified, *badSeq = first failing seq (0 if none), *backwards =
 // records whose RTC time went backwards.

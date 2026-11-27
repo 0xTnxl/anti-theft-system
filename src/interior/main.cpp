@@ -1119,6 +1119,7 @@ void runCommand(char* cmd, uint32_t now) {
         const int slot = atoi(arg);
         if (slot >= 0 && creds::remove((uint8_t)slot)) {
             evlog::append(evlog::EV_CARD_REMOVED, (uint8_t)slot);
+            web::forgetName((uint8_t)slot);
             Serial.println("deleted");
         } else {
             Serial.println("no such slot");
@@ -1126,6 +1127,7 @@ void runCommand(char* cmd, uint32_t now) {
     } else if (!strcmp(cmd, "wipe")) {
         if (arg && !strcmp(arg, "yes")) {
             creds::wipeAll();
+            web::forgetAllNames();
             evlog::append(evlog::EV_WIPE);
             Serial.println("all cards deleted and shared PIN cleared");
         } else {
@@ -1324,12 +1326,12 @@ void statusJson(String& out) {
     const uint32_t now = millis();
     uint8_t st;
     const uint32_t t = evlog::now(&st);
-    char b[760];
+    char b[900];
     snprintf(b, sizeof(b),
              "{\"lock\":\"%s\",\"position\":%.2f,\"door\":\"%s\",\"sw1\":%d,\"sw2\":%d,\"armed\":%d,\"disarmed\":%d,"
              "\"motor\":\"%s\",\"alarm\":\"%s\",\"link\":%s,\"lastRx\":%lu,\"cards\":%u,\"maxCards\":%u,\"pinSet\":%s,"
              "\"fails\":%lu,\"lockout\":%u,\"adminMode\":\"%s\",\"phonePin\":%lu,\"logCount\":%lu,\"logHead\":%lu,"
-             "\"time\":%lu,\"rtc\":%u,\"uptime\":%lu,\"vibration\":%d,\"motion\":%d,\"build\":\"%s\"}",
+             "\"time\":%lu,\"rtc\":%u,\"uptime\":%lu,\"boot\":%lu,\"vibration\":%d,\"motion\":%d,\"build\":\"%s\"}",
              lockName(gLock), (double)rel() / COUNTS_PER_TURN, gDoorClosed.stable ? "closed" : "open", gSwLocked.stable,
              gSwLatch.stable, gArmedPrev, gDisarmed, gMotorOn ? "running" : gHoldOn ? "holding" : "off",
              alarmName(gAlarm), gLink.established(now) ? "true" : "false", (unsigned long)((now - gLastRxMs) / 1000),
@@ -1337,7 +1339,7 @@ void statusJson(String& out) {
              lockoutLeftS(now), gAdmin == Admin::Enroll ? "enroll" : gAdmin == Admin::SetPin ? "setpin" : "none",
              (unsigned long)(phonePinActive(now) ? (gPhonePinUntil - now + 999) / 1000 : 0),
              (unsigned long)evlog::count(), (unsigned long)evlog::headSeq(), (unsigned long)t, st,
-             (unsigned long)(now / 1000), intrusion::vibrationActive(), intrusion::motionActive(), buildName());
+             (unsigned long)(now / 1000), (unsigned long)evlog::bootCount(), intrusion::vibrationActive(), intrusion::motionActive(), buildName());
     out = b;
 }
 
@@ -1359,7 +1361,9 @@ void cardsJson(String& out) {
         if (!creds::slotUid(i, uid, len)) continue;
         char hex[2 * proto::UID_MAX + 1];
         for (uint8_t j = 0; j < len; j++) snprintf(hex + 2 * j, 3, "%02X", uid[j]);
-        out += String(first ? "" : ",") + "{\"slot\":" + i + ",\"uid\":\"" + hex + "\"}";
+        char name[24];
+        web::cardName(i, name, sizeof(name));   // validated on save: no characters that need escaping
+        out += String(first ? "" : ",") + "{\"slot\":" + i + ",\"uid\":\"" + hex + "\",\"name\":\"" + name + "\"}";
         first = false;
     }
     out += "]}";
@@ -1427,6 +1431,7 @@ bool deleteCard(int slot, String& msg) {
         return false;
     }
     evlog::append(evlog::EV_CARD_REMOVED, (uint8_t)slot);
+    web::forgetName((uint8_t)slot);
     msg = "card removed";
     return true;
 }

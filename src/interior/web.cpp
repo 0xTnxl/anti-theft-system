@@ -7,6 +7,8 @@
 #include <string.h>
 
 #include "bootloader_random.h"
+#include "config_interior.h"
+#include "credentials.h"
 #include "evlog.h"
 #include "mbedtls/md.h"
 #include "mbedtls/pkcs5.h"
@@ -304,6 +306,17 @@ void hVerify() {
                   ",\"backwards\":" + back + "}");
 }
 
+bool validName(const String& n) {
+    if (n.length() > 20) return false;
+    for (unsigned i = 0; i < n.length(); i++) {
+        const char c = n[i];
+        if (!(isalnum((unsigned char)c) || c == ' ' || c == '\'' || c == '-' || c == '.')) return false;
+    }
+    return true;
+}
+
+void nameKey(uint8_t slot, char k[6]) { snprintf(k, 6, "n%u", slot); }
+
 void hAction() {
     if (!postOk() || !requireAdmin()) return;
     const String a = gServer.arg("a");
@@ -333,6 +346,21 @@ void hAction() {
             gPrefs.remove("init");
             ok = true;
             msg = "password changed";
+        }
+    } else if (a == "name") {
+        code = evlog::WA_NAME;
+        const int slot = gServer.arg("slot").toInt();
+        String n = gServer.arg("name");
+        n.trim();
+        if (slot < 0 || !creds::slotUsed((uint8_t)slot)) msg = "no such card";
+        else if (!validName(n)) msg = "names can use letters, numbers and spaces, up to 20";
+        else {
+            char k[6];
+            nameKey((uint8_t)slot, k);
+            if (n.length()) gPrefs.putString(k, n);
+            else gPrefs.remove(k);
+            ok = true;
+            msg = n.length() ? "name saved" : "name removed";
         }
     } else {
         result(false, "unknown action");
@@ -412,6 +440,23 @@ bool setApPass(const char* p) {
     strncpy(gApPass, p, sizeof(gApPass) - 1);
     gPrefs.putString("ap", gApPass);
     return true;
+}
+
+void cardName(uint8_t slot, char* out, size_t cap) {
+    char k[6];
+    nameKey(slot, k);
+    out[0] = 0;
+    if (gPrefs.isKey(k)) gPrefs.getString(k, out, cap);
+}
+
+void forgetName(uint8_t slot) {
+    char k[6];
+    nameKey(slot, k);
+    if (gPrefs.isKey(k)) gPrefs.remove(k);
+}
+
+void forgetAllNames() {
+    for (uint8_t i = 0; i < MAX_CREDENTIALS; i++) forgetName(i);
 }
 
 bool setAdminPass(const char* p) {
