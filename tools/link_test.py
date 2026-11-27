@@ -132,7 +132,7 @@ def main():
         m = intr.mark()
         intr.send("status")
         a = intr.expect(r"link=(\w+) lastRx=(\d+)s ago", 3, m)
-        c = intr.expect(r"cards=(\d+)/\d+ fails=(\d+) lockout=(\d+)s", 3, m)
+        c = intr.expect(r"cards=(\d+)/\d+.*?fails=(\d+) lockout=(\d+)s", 3, m)
         return {"link": a[1], "last_rx": int(a[2]), "cards": int(c[1]), "fails": int(c[2])}
 
     def auth(uid, pin, want, attempts=None):
@@ -170,6 +170,10 @@ def main():
         check(st["cards"] == 0 or args.force,
               f"interior already has {st['cards']} card(s); refusing to wipe them (use --force)")
         state["may_wipe"] = True
+        if st["cards"]:   # --force: start clean, so the first enroll sets the shared PIN
+            m = intr.mark()
+            intr.send("wipe yes")
+            intr.expect(r"all cards deleted", 3, m)
         m = intr.mark()
         intr.send("resetlockout")
         intr.expect(r"lockout reset", 3, m)
@@ -184,7 +188,7 @@ def main():
     def s_enroll():
         m = intr.mark()
         intr.send("enroll")
-        intr.expect(r"\[enroll\] tap", 3, m)
+        intr.expect(r"\[enroll\] (tap|no shared PIN yet)", 3, m)
         auth(UID, PIN, "ENROLL_AGAIN")
         intr.expect(r"step 1 ok", 3, m)
         auth(UID, PIN, "ENROLL_OK")

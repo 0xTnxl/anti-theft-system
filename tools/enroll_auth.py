@@ -46,14 +46,15 @@ def main():
         results.append((name, ok, note))
         print(f"  {'PASS' if ok else 'FAIL'}  {name}: {note}", flush=True)
 
-    def tap_and_pin(prompt, on_card=None):
-        """Waits for one full card + PIN attempt. Returns (code, seconds, rfid_drops)."""
+    def tap_and_pin(prompt, on_card=None, lock=False):
+        """Waits for one full card + PIN (or card + A) attempt. Returns (code, seconds, rfid_drops)."""
         me = ext.mark()
         say(prompt)
         ext.expect(r"\[rfid\] card read, (\d+)-byte UID", WAIT, me)
         if on_card:
             on_card()
-        print("      card read, now type the PIN and press #  (15 s without a key cancels)", flush=True)
+        print("      card read, now press * as the FIRST key (no digits)" if lock else
+              "      card read, now type the PIN and press #  (15 s without a key cancels)", flush=True)
         t0 = time.time()
         # Echo keypad activity live: the OLED may be missing, so this is the only feedback.
         seen, iseen, end, r = ext.mark(), intr.mark(), time.time() + WAIT, None
@@ -100,6 +101,7 @@ def main():
                        if other else "no interior firmware banner: is env:interior_sim (or env:interior) flashed?")
         time.sleep(1)
         sim = bool(intr.find(r"SIMULATED BOLT", mi))
+        consoleDoor = sim or bool(intr.find(r"BENCH BUILD", mi))
         intr.expect(r"\[link\] session established", 20, mi)
         try:
             ext.expect(r"\[ext\] anti-theft exterior module", 10, me)
@@ -124,31 +126,59 @@ def main():
                 # the interior's enroll window before the PIN arrives.
                 m = intr.mark()
                 intr.send("enroll")
-                intr.expect(r"\[enroll\] tap", 3, m)
-            code, _, _, d1 = tap_and_pin("ENROLL 1/2: tap the card, type the new PIN, press #", start_enroll)
-            if code != "ENROLL_AGAIN":
-                raise Fail(f"expected ENROLL_AGAIN, got {code}")
+                intr.expect(r"\[enroll\] (tap|no shared PIN yet)", 3, m)
+            print("  (all cards share ONE PIN: the first enrollment sets it, later cards must use it)")
             m = intr.mark()
-            code, _, _, d2 = tap_and_pin("ENROLL 2/2: tap the SAME card, type the SAME PIN, press #")
+            code, _, _, d1 = tap_and_pin("ENROLL: tap the card, type the shared PIN (new or existing), press #",
+                                         start_enroll)
+            d2 = 0
+            if code == "ENROLL_AGAIN":
+                code, _, _, d2 = tap_and_pin("ENROLL 2/2 (first card sets the PIN): SAME card, SAME PIN, press #")
             if code != "ENROLL_OK":
-                raise Fail(f"expected ENROLL_OK, got {code} (card or PIN differed from step 1?)")
+                raise Fail(f"expected ENROLL_OK, got {code} (wrong shared PIN, or card/PIN differed between steps)")
             g = intr.expect(r"stored in slot (\d+) \(PBKDF2 took (\d+) ms\)", 3, m)
             slot = int(g[1])
-            step("enroll", True, f"card + PIN stored in slot {slot} (hash {g[2]} ms); reader dropouts {d1 + d2}")
+            step("enroll", True, f"card stored in slot {slot} (hash {g[2]} ms); reader dropouts {d1 + d2}")
             time.sleep(2)
 
         mi = intr.mark()
         code, _, secs, d = tap_and_pin("AUTH: tap the enrolled card, type its PIN, press #")
         if code != "GRANTED":
             raise Fail(f"expected GRANTED, got {code}")
-        intr.expect(r"\[auth\] GRANTED", 3, mi)
-        try:
-            intr.expect(r"\(simulated\) bolt retracted|-> UNLOCKED|FAULT", 5, mi)
-        except Fail:
-            pass
-        lock = [l for l in intr.find(r"\[lock\]", mi)]
-        step("auth (correct PIN)", True, f"GRANTED {secs:.1f} s after the card read; interior: "
-                                         f"{'; '.join(lock[-2:]) or 'no lock change'}")
+        # The interior's GRANTED line can be garbled by motor noise on the USB
+        # serial line right as the motor starts: rely on the exterior result
+        # and the lock state instead.
+        h = intr.expect(r"-> HOLDING|FAULT: .*", 15, mi)
+        if "FAULT" in h[0]:
+            raise Fail(f"unlock failed: {h[0]}")
+        step("auth (correct PIN)", True, f"GRANTED {secs:.1f} s after the card read; bolt unlocked, latch held")
+        if consoleDoor:
+            say("Latch held. (Test build: the script now 'opens' the door from the interior console.)")
+            time.sleep(2)
+            intr.send("door open")
+        else:
+            say("Latch held: PUSH THE DOOR OPEN now (15 s)")
+        r = intr.expect(r"releasing the latch \((door opened|hold timed out)\)", 20, mi)
+        intr.expect(r"-> UNLOCKED|FAULT", 10, mi)
+        step("hold + release", r[1] == "door opened", f"latch released: {r[1]}")
+        if consoleDoor:
+            intr.send("door close")
+        else:
+            say("Close the door again")
+            time.sleep(5)
+
+        time.sleep(2)
+        mi = intr.mark()
+        me2 = ext.mark()
+        code, _, _, _ = tap_and_pin("LOCK: tap the enrolled card, then press * straight away (no PIN)", lock=True)
+        if code != "LOCKING":
+            hint = ("no lock request was sent: press * as the very first key after the card"
+                    if not ext.find(r"lock request \(card \+ [A*]\)", me2) else "door open or bolt moving?")
+            raise Fail(f"expected LOCKING, got {code}: {hint}")
+        l = intr.expect(r"-> LOCKED|FAULT: .*", 15, mi)
+        if "FAULT" in l[0]:
+            raise Fail(f"lock failed: {l[0]}")
+        step("lock (card + *)", True, "bolt locked")
 
         time.sleep(3)
         mi = intr.mark()

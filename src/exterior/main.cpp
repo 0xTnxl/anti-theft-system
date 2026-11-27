@@ -52,6 +52,7 @@ uint8_t gUid[proto::UID_MAX];
 uint8_t gUidLen = 0;
 char gPin[proto::PIN_MAX];
 uint8_t gPinLen = 0;
+bool gKeyPressed = false;   // any key since the card was read (card + * lock rule)
 bool gPinTooShort = false;
 uint32_t gLastKeyMs = 0;
 
@@ -155,14 +156,19 @@ void render(uint32_t now) {
             const char* top = "LOCKED";
             if (gStatus.alarm != proto::ALARM_NONE) top = "!! ALARM !!";
             else if (gStatus.flags & proto::STATUS_ENROLL) top = "ENROLL MODE";
+            else if (gStatus.flags & proto::STATUS_PHONE_PIN) top = "PHONE PIN READY";
             else if (gStatus.lock == proto::LOCK_FAULT) top = "LOCK FAULT";
-            else if (gStatus.lock == proto::LOCK_UNLOCKED) top = "UNLOCKED";
+            else if (gStatus.lock == proto::LOCK_UNLOCKED) top = "UNLOCKED  CARD+* LOCK";
+            else if (gStatus.lock == proto::LOCK_HOLDING) top = "PUSH DOOR OPEN";
+            else if (gStatus.lock == proto::LOCK_UNLOCKING || gStatus.lock == proto::LOCK_RELEASING) top = "UNLOCKING";
+            else if (gStatus.lock == proto::LOCK_LOCKING) top = "LOCKING";
+            else if (gStatus.lock == proto::LOCK_UNKNOWN) top = "BOLT POSITION ?";
             gOled.textCentered(0, top);
             gOled.textCentered(14, "TAP CARD", 2);
             break;
         }
         case Ui::PinEntry: {
-            gOled.textCentered(0, gPinTooShort ? "MIN 4 DIGITS" : "ENTER PIN  # = OK");
+            gOled.textCentered(0, gPinTooShort ? "MIN 4 DIGITS" : gPinLen ? "ENTER PIN  # = OK" : (gStatus.flags & proto::STATUS_PHONE_PIN) ? "# = PHONE PIN  * = LOCK" : "PIN + #   or * = LOCK");
             uint8_t i = 0;
             for (; i < gPinLen && i < sizeof(line) - 1; i++) line[i] = '*';
             line[i] = 0;
@@ -205,6 +211,29 @@ const Step BEEP_DENIED[] = {{BUZZER_LOW_HZ, 700}};
 const Step BEEP_LOCKOUT[] = {{BUZZER_LOW_HZ, 250}, {0, 120}, {BUZZER_LOW_HZ, 250}, {0, 120}, {BUZZER_LOW_HZ, 250}};
 const Step BEEP_TAMPER[] = {{BUZZER_HZ, 250}, {BUZZER_LOW_HZ, 250}};   // repeats while the alarm is new
 const Step BEEP_INFO[] = {{BUZZER_HZ, 60}};
+// Jingle Bells, half the chorus (8 bars, about 6.5 s): the opening line, then
+// the closing line, which ends on the home note. Each note is NT(pitch,
+// length in eighths); a short silence before the next note keeps repeated
+// notes apart. Pitches are octave 6 (C6 = 1047 Hz); TUNE_OCTAVE_UP doubles
+// them, which is louder on most piezos but sounds thinner.
+constexpr uint16_t TUNE_MUL = TUNE_OCTAVE_UP ? 2 : 1;
+constexpr uint16_t N_C = 1047 * TUNE_MUL, N_D = 1175 * TUNE_MUL, N_E = 1319 * TUNE_MUL, N_F = 1397 * TUNE_MUL, N_G = 1568 * TUNE_MUL;
+constexpr uint16_t EIGHTH = TUNE_EIGHTH_MS, GAP = 25;
+#define NT(hz, e) {hz, (uint16_t)((e) * EIGHTH - GAP)}, {0, GAP}
+const Step TUNE_WELCOME[] = {
+    // Jingle bells, jingle bells, jingle all the way
+    NT(N_E, 2), NT(N_E, 2), NT(N_E, 4),
+    NT(N_E, 2), NT(N_E, 2), NT(N_E, 4),
+    NT(N_E, 2), NT(N_G, 2), NT(N_C, 3), NT(N_D, 1),
+    NT(N_E, 8),
+    // Oh what fun it is to ride in a one-horse open sleigh
+    NT(N_F, 2), NT(N_F, 2), NT(N_F, 3), NT(N_F, 1),
+    NT(N_F, 2), NT(N_E, 2), NT(N_E, 2), NT(N_E, 1), NT(N_E, 1),
+    NT(N_G, 2), NT(N_G, 2), NT(N_F, 2), NT(N_D, 2),
+    NT(N_C, 8),
+};
+#undef NT
+static_assert(sizeof(TUNE_WELCOME) / sizeof(TUNE_WELCOME[0]) <= 255, "pattern too long for the buzzer engine");
 
 const Step* gPat = nullptr;
 uint8_t gPatLen = 0, gPatIdx = 0;
@@ -325,9 +354,10 @@ void sendHeartbeat(uint32_t now) {
 }
 
 const char* codeName(uint8_t c) {
-    static const char* names[] = {"?",    "GRANTED",      "DENIED",    "LOCKED_OUT", "FAULT",
-                                  "BUSY", "ENROLL_AGAIN", "ENROLL_OK", "ENROLL_FAIL"};
-    return c < 9 ? names[c] : "?";
+    static const char* names[] = {"?",           "GRANTED",   "DENIED",       "LOCKED_OUT",
+                                  "FAULT",       "BUSY",      "ENROLL_AGAIN", "ENROLL_OK",
+                                  "ENROLL_FAIL", "LOCKING",   "LOCK_REFUSED", "PIN_SET"};
+    return c < 12 ? names[c] : "?";
 }
 
 void onAuthResult(const proto::AuthResult& r, uint32_t now) {
@@ -337,7 +367,8 @@ void onAuthResult(const proto::AuthResult& r, uint32_t now) {
     char buf[22];
     switch (r.code) {
         case proto::AUTH_GRANTED:
-            play(BEEP_GRANTED);
+            if (WELCOME_TUNE) play(TUNE_WELCOME);
+            else play(BEEP_GRANTED);
             showResult("ACCESS GRANTED", "WELCOME", Tone::Ok, RESULT_OK_MS, now);
             break;
         case proto::AUTH_DENIED:
@@ -364,6 +395,19 @@ void onAuthResult(const proto::AuthResult& r, uint32_t now) {
         case proto::AUTH_ENROLL_FAIL:
             play(BEEP_DENIED);
             showResult("ENROLL FAILED", "ERROR", Tone::Fail, RESULT_FAIL_MS, now);
+            break;
+        case proto::AUTH_LOCKING:
+            play(BEEP_GRANTED);
+            showResult("LOCKING DOOR", "LOCKED", Tone::Ok, RESULT_OK_MS, now);
+            break;
+        case proto::AUTH_LOCK_REFUSED:
+            play(BEEP_DENIED);
+            showResult(r.attemptsLeft == proto::REFUSE_DOOR_OPEN ? "CLOSE THE DOOR" : "BOLT IS MOVING",
+                       "NOT LOCKED", Tone::Fail, RESULT_FAIL_MS, now);
+            break;
+        case proto::AUTH_PIN_SET:
+            play(BEEP_GRANTED);
+            showResult("SHARED PIN CHANGED", "SAVED", Tone::Ok, RESULT_OK_MS, now);
             break;
         default:
             showResult("LOCK FAULT", "FAULT", Tone::Fail, RESULT_FAIL_MS, now);
@@ -474,6 +518,24 @@ void submitPin(uint32_t now) {
     mbedtls_platform_zeroize(&req, sizeof(req));
 }
 
+// Card + 'A': ask the interior to lock. Only the card UID is sent.
+void submitLock(uint32_t now) {
+    proto::LockRequest req = {};
+    esp_fill_random(&gReqId, sizeof(gReqId));
+    req.reqId = gReqId;
+    req.uidLen = gUidLen;
+    memcpy(req.uid, gUid, gUidLen);
+    wipeCredentials();
+    if (linkUp(now)) {
+        sendMsg(proto::LOCK_REQUEST, &req, sizeof(req), now);
+        gVerifyStartMs = now;
+        setUi(Ui::Verifying, now);
+    } else {
+        showResult("NO LINK TO LOCK", "OFFLINE", Tone::Fail, RESULT_FAIL_MS, now);
+    }
+    mbedtls_platform_zeroize(&req, sizeof(req));
+}
+
 void pollRfid(uint32_t now) {
     if (now - gLastRfidPollMs < RFID_POLL_MS) return;
     if (now - gOled.lastBusMs() < RC522_RESET_SETTLE_MS) return;   // RC522 just reset by SCL
@@ -500,6 +562,7 @@ void pollRfid(uint32_t now) {
     gUidLen = len;
     mbedtls_platform_zeroize(uid, sizeof(uid));
     Serial.printf("[rfid] card read, %u-byte UID\n", len);
+    gKeyPressed = false;
     gPinLen = 0;
     gPinTooShort = false;
     gLastKeyMs = now;
@@ -520,6 +583,8 @@ char nextKey(uint32_t now) {
 void handleKeys(uint32_t now) {
     const char k = nextKey(now);
     if (k) {
+        const bool firstKey = !gKeyPressed;
+        gKeyPressed = true;
         gLastKeyMs = now;
         gLastActivityMs = now;
         gUiDirty = true;
@@ -528,6 +593,10 @@ void handleKeys(uint32_t now) {
         else Serial.printf("[key] %c\n", k);
         if (k >= '0' && k <= '9') {
             if (gPinLen < proto::PIN_MAX) gPin[gPinLen++] = k;
+        } else if (k == KEY_CLEAR && STAR_FIRST_LOCKS && firstKey) {
+            Serial.println("[ui] lock request (card + *)");
+            submitLock(now);
+            return;
         } else if (k == KEY_CLEAR) {
             if (gPinLen) {
                 mbedtls_platform_zeroize(gPin, sizeof(gPin));
@@ -537,7 +606,16 @@ void handleKeys(uint32_t now) {
                 setUi(Ui::CardWait, now);
                 return;
             }
+        } else if (k == KEY_LOCK) {
+            Serial.println("[ui] lock request (card + A)");
+            submitLock(now);
+            return;
         } else if (k == KEY_SUBMIT) {
+            if (gPinLen == 0 && (gStatus.flags & proto::STATUS_PHONE_PIN)) {
+                Serial.println("[ui] using the PIN entered on the phone");
+                submitPin(now);   // pinLen 0 = phone PIN
+                return;
+            }
             if (gPinLen >= proto::PIN_MIN) {
                 submitPin(now);
                 return;
@@ -575,8 +653,21 @@ void testCommand(char* line, uint32_t now) {
     char* cmd = strtok(line, " ");
     char* uid = strtok(nullptr, " ");
     char* pin = strtok(nullptr, " ");
+    if (cmd && !strcmp(cmd, "lock") && uid) {
+        uint8_t u[proto::UID_MAX];
+        uint8_t uLen = 0;
+        if (!parseUid(uid, u, uLen) || !linkUp(now) || !(gUi == Ui::CardWait || gUi == Ui::Lockout)) {
+            Serial.println("[test] not ready");
+            return;
+        }
+        memcpy(gUid, u, uLen);
+        gUidLen = uLen;
+        Serial.println("[test] lock sent");
+        submitLock(now);
+        return;
+    }
     if (!cmd || strcmp(cmd, "auth") != 0 || !uid || !pin) {
-        Serial.println("[test] usage: auth <uid hex> <pin digits>");
+        Serial.println("[test] usage: auth <uid hex> <pin digits> | lock <uid hex>");
         return;
     }
     const size_t pinLen = strlen(pin);

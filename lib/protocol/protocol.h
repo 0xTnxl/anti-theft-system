@@ -11,6 +11,7 @@ namespace proto {
 enum MsgType : uint8_t {
     AUTH_REQUEST = 0x20,   // exterior -> interior
     AUTH_RESULT = 0x21,    // interior -> exterior
+    LOCK_REQUEST = 0x22,   // exterior -> interior: card + 'A' (no PIN)
     HEARTBEAT = 0x30,      // exterior -> interior
     STATUS = 0x31,         // interior -> exterior
 };
@@ -28,6 +29,15 @@ enum AuthCode : uint8_t {
     AUTH_ENROLL_AGAIN = 6,   // enroll step 1 stored: tap the same card, same PIN again
     AUTH_ENROLL_OK = 7,
     AUTH_ENROLL_FAIL = 8,
+    AUTH_LOCKING = 9,        // lock request accepted, bolt being thrown (or already locked)
+    AUTH_LOCK_REFUSED = 10,  // attemptsLeft carries a LockRefusal reason
+    AUTH_PIN_SET = 11,       // shared PIN changed
+};
+
+enum LockRefusal : uint8_t {
+    REFUSE_DOOR_OPEN = 1,
+    REFUSE_BUSY = 2,         // a move is in progress
+    REFUSE_FAULT = 3,
 };
 
 enum LockState : uint8_t {
@@ -37,6 +47,8 @@ enum LockState : uint8_t {
     LOCK_UNLOCKED = 3,
     LOCK_LOCKING = 4,
     LOCK_FAULT = 5,
+    LOCK_HOLDING = 6,     // latch held open: push the door
+    LOCK_RELEASING = 7,   // latch being released after the door opened
 };
 
 enum AlarmCause : uint8_t {
@@ -54,6 +66,7 @@ enum StatusFlags : uint8_t {
     STATUS_DISARMED = 0x02,   // alarms suppressed (serial "disarm")
     STATUS_ENROLL = 0x04,
     STATUS_DOOR_OPEN = 0x08,
+    STATUS_PHONE_PIN = 0x10,   // a dashboard PIN is waiting: card + '#' with no digits uses it
 };
 
 struct __attribute__((packed)) AuthRequest {
@@ -62,6 +75,13 @@ struct __attribute__((packed)) AuthRequest {
     uint8_t uid[UID_MAX];   // zero padded
     uint8_t pinLen;
     char pin[PIN_MAX];      // ASCII digits, zero padded, not terminated
+};
+
+struct __attribute__((packed)) LockRequest {
+    uint32_t reqId;
+    uint8_t uidLen;
+    uint8_t uid[UID_MAX];   // zero padded
+    uint8_t reserved[9];    // zero; same size as AuthRequest
 };
 
 struct __attribute__((packed)) AuthResult {
@@ -86,6 +106,7 @@ struct __attribute__((packed)) Status {
 
 static_assert(sizeof(AuthRequest) == 24, "AuthRequest layout");
 static_assert(sizeof(AuthResult) == 8, "AuthResult layout");
+static_assert(sizeof(LockRequest) == 24, "LockRequest layout");
 static_assert(sizeof(Heartbeat) == 8, "Heartbeat layout");
 static_assert(sizeof(Status) == 4, "Status layout");
 
@@ -94,6 +115,7 @@ inline size_t payloadSize(uint8_t type) {
     switch (type) {
         case AUTH_REQUEST: return sizeof(AuthRequest);
         case AUTH_RESULT: return sizeof(AuthResult);
+        case LOCK_REQUEST: return sizeof(LockRequest);
         case HEARTBEAT: return sizeof(Heartbeat);
         case STATUS: return sizeof(Status);
         default: return 0;

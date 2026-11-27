@@ -303,21 +303,50 @@ void jog(char which, int ms) {
                   m.ms ? ", stopped at the limit switch" : "", m.stalled ? ", STALLED (no encoder movement)" : "");
 }
 
+// Turns the output shaft exactly n turns by encoder count (COUNTS_PER_TURN).
+// Mark the shaft first: if it did not end where it started, adjust
+// COUNTS_PER_TURN in config_interior.h (Q25). Stops early at the matching switch.
+void turns(char which, int n) {
+    n = constrain(n, 1, 5);
+    const bool unlock = which == 'u';
+    const motor::Dir d = unlock ? motor::Dir::Unlock : motor::Dir::Lock;
+    const uint8_t stopPin = unlock ? PIN_SW_UNLOCKED : PIN_SW_LOCKED;
+    const int32_t want = (int32_t)n * COUNTS_PER_TURN;
+    const int32_t c0 = motor::count();
+    const uint32_t t0 = millis(), limit = (uint32_t)n * TURN_TIME_MS * 2 + 1500;
+    bool sw = false, stall = false;
+    motor::drive(d, MOTOR_DUTY_PCT);
+    while (millis() - t0 < limit) {
+        if (abs(motor::count() - c0) >= want - MOVE_STOP_LEAD_COUNTS) break;
+        if (pressed(stopPin)) { sw = true; break; }
+        if (motor::stalled(millis())) { stall = true; break; }
+        delay(1);
+    }
+    const uint32_t ms = millis() - t0;
+    stopMotor();
+    delay(150);
+    const int32_t got = motor::count() - c0;
+    Serial.printf("turns %s %d: asked %ld counts, moved %+ld counts (%.2f turns) in %lu ms%s%s\n",
+                  unlock ? "unlock" : "lock", n, (long)want, (long)got, (double)abs(got) / COUNTS_PER_TURN,
+                  (unsigned long)ms, sw ? ", stopped at the limit switch" : "", stall ? ", STALLED" : "");
+    Serial.printf("  if the shaft turned exactly %d time(s), COUNTS_PER_TURN is right; else set it to %ld / real turns\n",
+                  n, (long)abs(got));
+}
+
 void testMotor() {
     Serial.println("\n>> MOTOR: unlock, then lock (moves the bolt)");
-    const uint32_t limit = MOTOR_MOVE_TIMEOUT_MS * 2;
+    const uint32_t limit = (UNLOCK_TURNS + LATCH_TURNS) * TURN_TIME_MS * 2 + 1500;
     const Move u = driveTo(motor::Dir::Unlock, PIN_SW_UNLOCKED, limit);
     delay(300);
     const Move l = driveTo(motor::Dir::Lock, PIN_SW_LOCKED, limit);
     char note[160];
-    snprintf(note, sizeof(note), "unlock %lu ms / %+ld counts, lock %lu ms / %+ld counts (timeout %lu ms)",
-             (unsigned long)u.ms, (long)u.counts, (unsigned long)l.ms, (long)l.counts,
-             (unsigned long)MOTOR_MOVE_TIMEOUT_MS);
+    snprintf(note, sizeof(note), "unlock %lu ms / %+ld counts, lock %lu ms / %+ld counts (limit %lu ms)",
+             (unsigned long)u.ms, (long)u.counts, (unsigned long)l.ms, (long)l.counts, (unsigned long)limit);
     if (u.ms && l.ms) {
-        const bool slow = u.ms > MOTOR_MOVE_TIMEOUT_MS || l.ms > MOTOR_MOVE_TIMEOUT_MS;
+        const bool slow = u.ms > limit / 2 || l.ms > limit / 2;
         const bool noEnc = u.counts == 0 && l.counts == 0 && u.ms > 1 && l.ms > 1;
         st::record("motor + limit switches", slow || noEnc ? st::WARN : st::PASS, "%s%s%s", note,
-                   slow ? ": too slow, raise MOTOR_MOVE_TIMEOUT_MS (Q2)" : "",
+                   slow ? ": slower than expected, raise TURN_TIME_MS (Q2)" : "",
                    noEnc ? ": no encoder counts, set ENCODER_STALL_DETECT false or fix the encoder" : "");
     } else if (u.stalled || l.stalled) {
         st::record("motor + limit switches", st::FAIL, "%s: STALLED. Bolt jammed, motor supply missing, or encoder not working (Q3)", note);
@@ -360,7 +389,7 @@ void runAuto() {
 }
 
 void help() {
-    Serial.println("commands: switches | encoder | vibration | motion | jog u|l <ms> | motor yes | b | monitor | auto | all | summary | help");
+    Serial.println("commands: switches | encoder | vibration | motion | jog u|l <ms> | turns u|l <n> | motor yes | b | monitor | auto | all | summary | help");
 }
 
 }  // namespace
@@ -399,6 +428,7 @@ void loop() {
         else if (!strcmp(line, "motor yes")) testMotor();
         else if (!strcmp(line, "motor")) { Serial.println("this moves the bolt: type 'motor yes'"); return; }
         else if (!strncmp(line, "jog ", 4) && (line[4] == 'u' || line[4] == 'l')) { jog(line[4], atoi(line + 5)); return; }
+        else if (!strncmp(line, "turns ", 6) && (line[6] == 'u' || line[6] == 'l')) { turns(line[6], atoi(line + 7)); return; }
         else if (!strcmp(line, "b")) { beepHz(2000, 150); return; }
         else if (!strcmp(line, "monitor")) { monitor(); return; }
         else if (!strcmp(line, "auto")) { runAuto(); return; }

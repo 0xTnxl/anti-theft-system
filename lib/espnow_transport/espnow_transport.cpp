@@ -30,7 +30,8 @@ void onRecv(const uint8_t* mac, const uint8_t* data, int len) {
 
 }  // namespace
 
-bool begin(const uint8_t myMac[6], const uint8_t peerMac[6], uint8_t channel, int8_t maxTxQdBm) {
+bool begin(const uint8_t myMac[6], const uint8_t peerMac[6], uint8_t channel, int8_t maxTxQdBm,
+           const char* apSsid, const char* apPass) {
     memcpy(gPeer, peerMac, 6);
     gQueue = xQueueCreate(8, sizeof(Packet));
     if (!gQueue) return false;
@@ -38,7 +39,10 @@ bool begin(const uint8_t myMac[6], const uint8_t peerMac[6], uint8_t channel, in
     // Arduino-ESP32 2.x resets the base MAC to the factory value inside
     // WiFi.mode() (tcpipInit), so esp_base_mac_addr_set() does not stick.
     // Set the STA interface MAC directly once WiFi is running instead.
-    WiFi.mode(WIFI_STA);
+    // With apSsid the board also runs a WPA2 access point (dashboard) on the
+    // same channel: the ESP32 has one radio, so ESP-NOW and the AP share it.
+    WiFi.persistent(false);
+    WiFi.mode(apSsid ? WIFI_AP_STA : WIFI_STA);
     WiFi.disconnect();
     const esp_err_t sm = esp_wifi_set_mac(WIFI_IF_STA, myMac);
 
@@ -53,9 +57,18 @@ bool begin(const uint8_t myMac[6], const uint8_t peerMac[6], uint8_t channel, in
     Serial.printf("[espnow] STA MAC %02x:%02x:%02x:%02x:%02x:%02x, channel %u\n", actual[0],
                   actual[1], actual[2], actual[3], actual[4], actual[5], channel);
 
-    esp_wifi_set_promiscuous(true);
-    esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
-    esp_wifi_set_promiscuous(false);
+    if (apSsid) {
+        if (!WiFi.softAP(apSsid, apPass, channel, 0, 4)) {
+            Serial.println("[wifi] access point failed to start");
+            return false;
+        }
+        Serial.printf("[wifi] access point '%s' on channel %u, http://%s\n", apSsid, channel,
+                      WiFi.softAPIP().toString().c_str());
+    } else {
+        esp_wifi_set_promiscuous(true);
+        esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+        esp_wifi_set_promiscuous(false);
+    }
     if (maxTxQdBm > 0) esp_wifi_set_max_tx_power(maxTxQdBm);
 
     if (esp_now_init() != ESP_OK) return false;

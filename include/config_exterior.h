@@ -17,6 +17,10 @@ constexpr char KEYMAP[4][4] = {
 };
 constexpr char KEY_CLEAR = '*';
 constexpr char KEY_SUBMIT = '#';
+constexpr char KEY_LOCK = 'A';   // card + A: lock the door (no PIN), if the keypad's A works
+// Card + '*' as the FIRST key after the card read also locks. Once any key has
+// been pressed, '*' only clears the digits / cancels, as before.
+constexpr bool STAR_FIRST_LOCKS = true;
 constexpr uint32_t KEYPAD_SCAN_MS = 5;
 constexpr uint8_t KEYPAD_DEBOUNCE_SCANS = 3;
 
@@ -66,7 +70,12 @@ constexpr uint32_t TAMPER_BEEP_MS = 30000;
 // A passive piezo is loudest at its resonant frequency (often 2-4 kHz).
 // Find it with the kick test 'sweep' and put the loudest value here (Q24).
 constexpr uint16_t BUZZER_HZ = 2700;       // main tone: granted, tamper
-constexpr uint16_t BUZZER_LOW_HZ = 1800;   // "low" tone: denied, lockout, tamper alternate   // tamper pattern length after an alarm starts
+constexpr uint16_t BUZZER_LOW_HZ = 1800;
+// GRANTED plays half the Jingle Bells chorus (about 6.5 s, carries on after the
+// screen returns to "tap card"). false = the two short chirps.
+constexpr bool WELCOME_TUNE = true;
+constexpr uint16_t TUNE_EIGHTH_MS = 100;   // tempo: 100 ms per eighth note = 150 BPM
+constexpr bool TUNE_OCTAVE_UP = false;     // true = one octave higher (louder, thinner)   // "low" tone: denied, lockout, tamper alternate   // tamper pattern length after an alarm starts
 
 // ---- UI timing ------------------------------------------------------------
 constexpr uint32_t PIN_ENTRY_TIMEOUT_MS = 15000;

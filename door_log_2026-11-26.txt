@@ -1,0 +1,221 @@
+   #1      no clock             boot 1 +0s  BOOT 1 1
+   #2      no clock             boot 1 +22s  ALARM d=3
+   #3      no clock             boot 2 +0s  BOOT 1 2
+   #4      no clock             boot 3 +0s  BOOT 1 3
+   #5      no clock             boot 3 +2s  WIPE
+   #6      no clock             boot 3 +2s  LOCKOUT_RESET
+   #7      no clock             boot 3 +6s  PIN_CHANGED
+   #8      no clock             boot 3 +6s  CARD_ADDED card 0
+   #9      no clock             boot 3 +13s  CARD_ADDED card 1
+   #10     no clock             boot 3 +17s  GRANTED card 1
+   #11     no clock             boot 3 +19s  UNLOCKED
+   #12     no clock             boot 3 +20s  DOOR_OPEN d=6
+   #13     no clock             boot 3 +21s  LATCH_RELEASED d=1
+   #14     no clock             boot 3 +22s  LOCK_REQUEST card 0 1 0
+   #15     no clock             boot 3 +24s  DOOR_CLOSED d=3
+   #16     no clock             boot 3 +25s  LOCK_REQUEST card 0 d=1
+   #17     no clock             boot 3 +27s  LOCKED
+   #18     no clock             boot 3 +28s  LOCK_REQUEST card 0 d=1
+   #19     no clock             boot 3 +31s  LOCK_DENIED_CARD
+   #20     no clock             boot 3 +34s  GRANTED card 0
+   #21     no clock             boot 3 +37s  UNLOCKED
+   #22     no clock             boot 3 +52s  LATCH_RELEASED
+   #23     no clock             boot 3 +53s  LOCK_REQUEST card 0 d=1
+   #24     no clock             boot 3 +55s  LOCKED
+   #25     no clock             boot 3 +60s  PIN_CHANGED
+   #26     no clock             boot 3 +64s  DENIED_PIN card 1
+   #27     no clock             boot 3 +67s  GRANTED card 1
+   #28     no clock             boot 3 +70s  UNLOCKED
+   #29     no clock             boot 3 +70s  DOOR_OPEN d=6
+   #30     no clock             boot 3 +71s  LATCH_RELEASED d=1
+   #31     no clock             boot 3 +72s  DOOR_CLOSED d=3
+   #32     no clock             boot 3 +72s  LOCK_REQUEST card 0 d=1
+   #33     no clock             boot 3 +74s  LOCKED
+   #34     no clock             boot 3 +74s  LOCKOUT_RESET
+   #35     no clock             boot 3 +74s  DOOR_OPEN d=1
+   #36     no clock             boot 3 +74s  ALARM d=1
+   #37     no clock             boot 3 +74s  DOOR_CLOSED d=1
+   #38     no clock             boot 3 +74s  ALARM_CLEARED d=1
+   #39     no clock             boot 4 +0s  BOOT 1 4
+   #40     no clock             boot 5 +0s  BOOT 1 5
+   #41     no clock             boot 6 +0s  BOOT 1 6
+   #42     no clock             boot 7 +0s  BOOT 1 7
+   #43     no clock             boot 8 +0s  BOOT 1 8
+   #44     no clock             boot 8 +2s  WIPE
+   #45     no clock             boot 8 +2s  LOCKOUT_RESET
+   #46     no clock             boot 8 +10s  WIPE
+   #47     no clock             boot 8 +10s  LOCKOUT_RESET
+   #48     no clock             boot 9 +0s  BOOT 1 9
+   #49     no clock             boot 10 +0s  BOOT 1 10
+   #50     no clock             boot 10 +2s  LOCKOUT_RESET
+   #51     no clock             boot 10 +11s  PIN_CHANGED
+   #52     no clock             boot 10 +11s  CARD_ADDED card 0
+   #53     no clock             boot 10 +14s  GRANTED card 0
+   #54     no clock             boot 10 +17s  UNLOCKED
+   #55     no clock             boot 10 +20s  DENIED_PIN card 0
+   #56     no clock             boot 10 +23s  DENIED_CARD
+   #57     no clock             boot 10 +26s  DENIED_PIN card 0
+   #58     no clock             boot 10 +30s  DENIED_PIN card 0
+   #59     no clock             boot 10 +32s  LATCH_RELEASED
+   #60     no clock             boot 10 +33s  DENIED_PIN card 0
+   #61     no clock             boot 10 +33s  LOCKOUT 30 5
+   #62     no clock             boot 11 +0s  BOOT 1 11
+   #63     no clock             boot 11 +9s  LOCKOUT_RESET
+   #64     no clock             boot 11 +9s  GRANTED card 0
+   #65     no clock             boot 11 +12s  UNLOCKED
+   #66     no clock             boot 11 +26s  GRANTED card 0
+   #67     no clock             boot 11 +41s  LATCH_RELEASED
+   #68     no clock             boot 11 +87s  GRANTED card 0
+   #69     no clock             boot 11 +88s  UNLOCKED
+   #70     no clock             boot 11 +88s  WIPE
+   #71     no clock             boot 11 +89s  LOCKOUT_RESET
+   #72     no clock             boot 11 +103s  LATCH_RELEASED
+   #73     no clock             boot 12 +0s  BOOT 1 12
+   #74     no clock             boot 13 +0s  BOOT 1 13
+   #75     no clock             boot 14 +0s  BOOT 1 14
+   #76     no clock             boot 15 +0s  BOOT 1 15
+   #77     no clock             boot 15 +28s  PIN_CHANGED
+   #78     no clock             boot 15 +29s  CARD_ADDED card 0
+   #79     no clock             boot 15 +48s  GRANTED card 0
+   #80     no clock             boot 15 +51s  UNLOCKED
+   #81     no clock             boot 15 +53s  DOOR_OPEN d=6
+   #82     no clock             boot 15 +54s  LATCH_RELEASED d=1
+   #83     no clock             boot 15 +55s  DOOR_CLOSED d=3
+   #84     no clock             boot 15 +81s  GRANTED card 0
+   #85     no clock             boot 15 +82s  UNLOCKED
+   #86     no clock             boot 15 +82s  LOCKOUT_RESET
+   #87     no clock             boot 15 +97s  LATCH_RELEASED
+   #88     no clock             boot 16 +0s  BOOT 1 16
+   #89     no clock             boot 17 +0s  BOOT 1 17
+   #90     no clock             boot 17 +9s  CARD_ADDED card 0
+   #91     no clock             boot 17 +20s  GRANTED card 0
+   #92     no clock             boot 17 +22s  UNLOCKED
+   #93     no clock             boot 17 +24s  DOOR_OPEN d=6
+   #94     no clock             boot 17 +25s  LATCH_RELEASED d=1
+   #95     no clock             boot 17 +27s  DOOR_CLOSED d=3
+   #96     no clock             boot 17 +39s  DENIED_PIN card 0
+   #97     no clock             boot 17 +40s  LOCKOUT_RESET
+   #98     no clock             boot 18 +0s  BOOT 1 18
+   #99     no clock             boot 19 +0s  BOOT 1 19
+   #100    no clock             boot 19 +32s  CARD_ADDED card 0
+   #101    no clock             boot 19 +118s  GRANTED card 0
+   #102    no clock             boot 19 +121s  UNLOCKED
+   #103    no clock             boot 19 +123s  DOOR_OPEN d=6
+   #104    no clock             boot 19 +124s  LATCH_RELEASED d=1
+   #105    no clock             boot 19 +125s  DOOR_CLOSED d=3
+   #106    no clock             boot 19 +140s  GRANTED card 0
+   #107    no clock             boot 19 +141s  UNLOCKED
+   #108    no clock             boot 19 +142s  LOCKOUT_RESET
+   #109    no clock             boot 19 +156s  LATCH_RELEASED
+   #110    no clock             boot 20 +0s  BOOT 1 20
+   #111    no clock             boot 20 +23s  GRANTED card 0
+   #112    no clock             boot 20 +26s  UNLOCKED
+   #113    no clock             boot 20 +41s  LATCH_RELEASED
+   #114    no clock             boot 21 +0s  BOOT 1 21
+   #115    no clock             boot 22 +0s  BOOT 1 22
+   #116    no clock             boot 22 +118s  ALARM d=3
+   #117    no clock             boot 23 +0s  BOOT 1 23
+   #118    no clock             boot 23 +10s  ALARM d=3
+   #119    no clock             boot 24 +0s  BOOT 1 24
+   #120    no clock             boot 24 +10s  ALARM d=3
+   #121    no clock             boot 25 +0s  BOOT 1 25
+   #122    no clock             boot 26 +0s  BOOT 1 26
+   #123    no clock             boot 27 +0s  BOOT 1 27
+   #124    no clock             boot 27 +10s  ALARM d=3
+   #125    no clock             boot 28 +0s  BOOT 1 28
+   #126    no clock             boot 29 +0s  BOOT 1 29
+   #127    no clock             boot 30 +0s  BOOT 1 30
+   #128    no clock             boot 30 +110s  GRANTED card 0
+   #129    no clock             boot 30 +112s  UNLOCKED
+   #130    no clock             boot 30 +114s  LOCKOUT_RESET
+   #131    no clock             boot 30 +127s  LATCH_RELEASED
+   #132    no clock             boot 32 +0s  BOOT 1 32
+   #133    no clock             boot 33 +0s  BOOT 1 33
+   #134    no clock             boot 35 +0s  BOOT 1 35
+   #135    no clock             boot 36 +0s  BOOT 1 36
+   #136    no clock             boot 36 +13s  GRANTED card 0
+   #137    no clock             boot 36 +15s  UNLOCKED
+   #138    no clock             boot 36 +17s  DOOR_OPEN d=6
+   #139    no clock             boot 36 +18s  LATCH_RELEASED d=1
+   #140    no clock             boot 36 +19s  DOOR_CLOSED d=3
+   #141    no clock             boot 36 +31s  GRANTED card 0
+   #142    no clock             boot 36 +32s  UNLOCKED
+   #143    no clock             boot 36 +33s  LOCKOUT_RESET
+   #144    no clock             boot 36 +46s  DENIED_PIN card 0
+   #145    no clock             boot 36 +47s  LATCH_RELEASED
+   #146    no clock             boot 36 +58s  GRANTED card 0
+   #147    no clock             boot 36 +59s  UNLOCKED
+   #148    no clock             boot 36 +65s  LOCK_REQUEST card 0 2 0
+   #149    no clock             boot 36 +74s  LATCH_RELEASED
+   #150    no clock             boot 36 +133s  LOCK_DENIED_CARD
+   #151    no clock             boot 36 +146s  DENIED_CARD
+   #152    no clock             boot 36 +168s  DENIED_CARD
+   #153    no clock             boot 36 +179s  DENIED_CARD
+   #154    no clock             boot 36 +205s  DENIED_PIN card 0
+   #155    no clock             boot 36 +205s  LOCKOUT 30 5
+   #156    no clock             boot 37 +0s  BOOT 1 37
+   #157    no clock             boot 38 +0s  BOOT 1 38
+   #158    no clock             boot 38 +33s  GRANTED card 0
+   #159    no clock             boot 38 +35s  UNLOCKED
+   #160    no clock             boot 39 +0s  BOOT 1 39
+   #161    no clock             boot 39 +35s  LOCK_REQUEST card 0 d=1
+   #162    no clock             boot 39 +201s  LOCK_REQUEST card 0 d=1
+   #163    no clock             boot 39 +211s  GRANTED card 0
+   #164    no clock             boot 39 +213s  UNLOCKED
+   #165    no clock             boot 39 +228s  LATCH_RELEASED
+   #166    no clock             boot 40 +0s  BOOT 1 40
+   #167    no clock             boot 41 +0s  BOOT 1 41
+   #168    no clock             boot 41 +34s  ALARM d=3
+   #169    no clock             boot 42 +0s  BOOT 1 42
+   #170    no clock             boot 43 +0s  BOOT 1 43
+   #171    no clock             boot 44 +0s  BOOT 1 44
+   #172    no clock             boot 45 +0s  BOOT 1 45
+   #173    no clock             boot 46 +0s  BOOT 1 46
+   #174    no clock             boot 47 +0s  BOOT 1 47
+   #175    no clock             boot 48 +0s  BOOT 1 48
+   #176    no clock             boot 48 +30s  GRANTED card 0
+   #177    no clock             boot 48 +32s  UNLOCKED
+   #178    no clock             boot 48 +34s  DOOR_OPEN d=6
+   #179    no clock             boot 48 +35s  LATCH_RELEASED d=1
+   #180    no clock             boot 48 +37s  DOOR_CLOSED d=3
+   #181    no clock             boot 48 +58s  LOCK_REQUEST card 0 d=1
+   #182    no clock             boot 48 +59s  LOCKED
+   #183    no clock             boot 48 +68s  GRANTED card 0
+   #184    no clock             boot 48 +70s  LOCKOUT_RESET
+   #185    no clock             boot 48 +70s  UNLOCKED
+   #186    no clock             boot 48 +85s  LATCH_RELEASED
+   #187    no clock             boot 49 +0s  BOOT 1 49
+   #188    no clock             boot 50 +0s  BOOT 1 50
+   #189    no clock             boot 51 +0s  BOOT 1 51
+   #190    no clock             boot 52 +0s  BOOT 1 52
+   #191    no clock             boot 53 +0s  BOOT 1 53
+   #192    no clock             boot 54 +0s  BOOT 1 54
+   #193    no clock             boot 55 +0s  BOOT 1 55
+   #194    no clock             boot 56 +0s  BOOT 1 56
+   #195    no clock             boot 56 +12s  GRANTED card 0
+   #196    no clock             boot 56 +14s  UNLOCKED
+   #197    no clock             boot 56 +16s  DOOR_OPEN d=6
+   #198    no clock             boot 56 +17s  LATCH_RELEASED d=1
+   #199    no clock             boot 56 +19s  DOOR_CLOSED d=3
+   #200    no clock             boot 56 +28s  LOCK_REQUEST card 0 d=1
+   #201    no clock             boot 56 +29s  LOCKED
+   #202    no clock             boot 56 +38s  GRANTED card 0
+   #203    no clock             boot 56 +40s  LOCKOUT_RESET
+   #204    no clock             boot 56 +40s  UNLOCKED
+   #205    no clock             boot 56 +55s  LATCH_RELEASED
+   #206    no clock             boot 56 +66s  GRANTED card 0
+   #207    no clock             boot 56 +67s  UNLOCKED
+   #208    no clock             boot 56 +82s  LATCH_RELEASED
+   #209    no clock             boot 56 +94s  GRANTED card 0
+   #210    no clock             boot 56 +95s  UNLOCKED
+   #211    no clock             boot 56 +110s  LATCH_RELEASED
+   #212    no clock             boot 56 +120s  LOCK_REQUEST card 0 d=1
+   #213    no clock             boot 56 +121s  LOCKED
+   #214    no clock             boot 57 +0s  BOOT 1 57
+
+214 record(s), anchor #1, head #214
+WARN  #5      no clock             boot 3 +2s  WIPE
+WARN  #44     no clock             boot 8 +2s  WIPE
+WARN  #46     no clock             boot 8 +10s  WIPE
+WARN  #70     no clock             boot 11 +88s  WIPE
+RESULT: LOG INTACT

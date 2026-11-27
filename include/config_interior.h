@@ -19,9 +19,38 @@ constexpr uint8_t MOTOR_DUTY_PCT = 100;   // drive strength while moving
 // TBC (Q1): which way is "unlock" depends on how M1/M2 and the bolt are fitted.
 // false: unlock = IN1 HIGH, IN2 LOW.  true: swapped.
 constexpr bool MOTOR_INVERT = false;
-constexpr uint32_t MOTOR_MOVE_TIMEOUT_MS = 3000;   // TBC (Q2): measure with the kick test
-constexpr uint32_t MOTOR_BRAKE_MS = 100;           // short brake, then coast
-constexpr uint32_t MOTOR_RETRY_BACKOFF_MS = 300;
+constexpr uint32_t MOTOR_BRAKE_MS = 250;           // brake (IN1 = IN2 = LOW, ENA on), then coast
+
+// ---- Bolt sequence (turns of the motor output shaft) ----------------------
+// Positions counted from "locked" (0) in the unlock (anticlockwise) direction:
+//   card + PIN: 0 -> 3 turns (2 retract the bolt, 1 opens the latch), hold there
+//   door seen open: back 1 turn to 2 (latch released, bolt stays retracted)
+//   card + A:   2 -> 0 (bolt thrown). There is no automatic relock.
+// Counts per output turn (Q25): confirmed on the bench, 'turns u 1' = exactly one turn.
+constexpr int32_t COUNTS_PER_TURN = 3300;
+constexpr int8_t ENC_UNLOCK_SIGN = 1;      // encoder counts up while driving "unlock" (bench: +786)
+constexpr uint8_t UNLOCK_TURNS = 2;        // bolt retract
+constexpr uint8_t LATCH_TURNS = 1;         // extra turn that opens the latch, then held
+constexpr uint8_t LOCK_TURNS = 2;          // card + A: back to 0
+constexpr int32_t MOVE_STOP_LEAD_COUNTS = 450;  // first guess at the coast after braking; learned per move
+// Last part of each move at reduced power, so the motor stops close to the
+// target instead of coasting ~0.27 turns past it (measured on the bench).
+constexpr int32_t SLOW_ZONE_COUNTS = COUNTS_PER_TURN / 3;
+constexpr uint8_t SLOW_DUTY_PCT = 45;
+// Moves are made one turn at a time with a short stop in between, so each
+// turn is felt separately (unlock: 1, pause, 2, pause, 3).
+constexpr uint32_t TURN_PAUSE_MS = 300;
+constexpr uint32_t TURN_TIME_MS = 700;     // rough time per turn, sets the move timeout
+constexpr uint8_t HOLD_DUTY_PCT = 25;      // push used to keep the latch at its position
+constexpr int32_t HOLD_BAND_COUNTS = 150;  // hold: push back only when the shaft drifts this far
+constexpr uint32_t HOLD_MAX_MS = 15000;    // door not opened in time: release anyway
+constexpr uint32_t DOOR_OPEN_CONFIRM_MS = 1000;   // reed open this long = door pushed open
+// TBC (Q26): true if a spring returns the latch by itself: release = motor off.
+constexpr bool RELEASE_BY_SPRING = false;
+// SW1 must close at "locked" and SW2 at "latch held"; reaching the turn count
+// without the switch is a FAULT. The bench/sim builds have no switches.
+constexpr bool REQUIRE_END_SWITCHES = true;
+constexpr uint8_t SEEK_EXTRA_TURNS = 1;    // position unknown: search this far past the end
 
 // ---- Motor encoder (C1, C2) -----------------------------------------------
 // GPIO35 is input only with no internal pull resistors. If the encoder outputs
@@ -63,9 +92,6 @@ constexpr uint8_t BUZZER_LEDC_CH = 2;   // LEDC timer 1 (separate from the motor
 constexpr uint8_t PIN_LED_RED = 4;
 constexpr uint8_t PIN_ONBOARD_LED = 2;  // DevKit V1 blue LED, unused, for "identify"
 
-// ---- Auto-relock (Q18) ----------------------------------------------------
-constexpr uint32_t RELOCK_IF_NOT_OPENED_MS = 10000;
-constexpr uint32_t RELOCK_AFTER_CLOSE_MS = 3000;
 
 // ---- Alarm (Q12, Q19) -----------------------------------------------------
 constexpr uint32_t ALARM_SIREN_MS = 180000;
@@ -76,13 +102,21 @@ constexpr uint8_t RF_TAMPER_FAILS = 5;
 constexpr uint32_t RF_TAMPER_WINDOW_MS = 10000;
 
 // ---- Credentials and lockout (Q17) ----------------------------------------
-constexpr uint8_t MAX_CREDENTIALS = 20;
+constexpr uint8_t MAX_CREDENTIALS = 100;   // cards; all share one PIN
 constexpr uint32_t PBKDF2_ITERATIONS = 4096;   // tune for about 200 ms (printed on enroll)
 constexpr uint32_t LOCKOUT_THRESHOLD = 5;
 constexpr uint32_t LOCKOUT_BASE_S = 30;
 constexpr uint32_t LOCKOUT_MAX_S = 900;
 constexpr uint32_t AUTH_MIN_INTERVAL_MS = 1000;
 constexpr uint32_t ENROLL_TIMEOUT_MS = 120000;   // restarted while someone is typing a PIN
+
+// ---- DS3231 real-time clock (I2C, optional) --------------------------------
+constexpr uint8_t PIN_RTC_SDA = 21;
+constexpr uint8_t PIN_RTC_SCL = 22;
+constexpr uint32_t CLOCK_JUMP_TOLERANCE_S = 5;   // RTC vs uptime disagreement that gets logged
+
+// ---- Event log (internal flash, LittleFS) ---------------------------------
+constexpr uint32_t LOG_RECORDS_PER_FILE = 10000;   // 2 files x 10000 x 48 bytes = 960 KB
 
 // ---- Serial console -------------------------------------------------------
 // lock / unlock / arm / disarm / clear / resetlockout. Turn off for production.
