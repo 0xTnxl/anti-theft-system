@@ -1,5 +1,6 @@
 #include "web.h"
 
+#include <DNSServer.h>
 #include <Preferences.h>
 #include <WebServer.h>
 #include <WiFi.h>
@@ -10,6 +11,7 @@
 #include "bootloader_random.h"
 #include "config_interior.h"
 #include "credentials.h"
+#include "devcert.h"
 #include "evlog.h"
 #include "mbedtls/md.h"
 #include "mbedtls/pkcs5.h"
@@ -33,6 +35,8 @@ constexpr size_t MAX_FORM = 2048;
 
 httpd_handle_t gHttps = nullptr;
 WebServer gSetup(80);   // plain HTTP: setup page and ca.crt only
+DNSServer gDns;         // answers door.usezend.app with this door (phones have no internet here)
+uint32_t gCertAt = 0;   // when a new certificate was installed (server restarts shortly after)
 SemaphoreHandle_t gLock = nullptr;
 Preferences gPrefs;
 char gApPass[33] = "";
@@ -579,6 +583,55 @@ esp_err_t hOta(httpd_req_t* r) {
     return result(q, ok, ok ? "update installed, the door restarts now" : err);
 }
 
+// Certificate for https://door.usezend.app (tools/renew_cert.py, or the app).
+// GET: what is installed, plus the door's certificate request (CSR).
+esp_err_t hCertGet(httpd_req_t* r) {
+    Req q(r);
+    if (!requireAdmin(q)) return ESP_OK;
+    String csr;
+    {
+        Guard g;
+        devcert::csrPem(csr);
+    }
+    csr.replace("\n", "\\n");
+    return json(q, 200, String("{\"host\":\"") + devcert::HOST + "\",\"installed\":" +
+                            (devcert::installed() || devcert::pending() ? "true" : "false") +
+                            ",\"notAfter\":" + devcert::notAfter() + ",\"issuer\":\"" + devcert::issuer() +
+                            "\",\"staging\":" + (devcert::staging() ? "true" : "false") + ",\"csr\":\"" + csr + "\"}");
+}
+
+// POST: the full-chain PEM as the raw request body.
+esp_err_t hCertPut(httpd_req_t* r) {
+    Req q(r);
+    if (!postOk(q) || !requireAdmin(q)) return ESP_OK;
+    const size_t len = r->content_len;
+    if (!len || len > devcert::MAX_CHAIN) return result(q, false, "certificate file is empty or too big");
+    char* buf = (char*)malloc(len + 1);
+    if (!buf) return result(q, false, "not enough memory");
+    size_t got = 0;
+    while (got < len) {
+        const int n = httpd_req_recv(r, buf + got, len - got);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) continue;
+        if (n <= 0) break;
+        got += n;
+    }
+    buf[got] = 0;
+    String msg;
+    bool ok = false;
+    if (got != len) msg = "upload interrupted";
+    else {
+        Guard g;
+        uint8_t st;
+        const uint32_t t = evlog::now(&st);
+        ok = devcert::install(buf, strlen(buf), st == evlog::RTC_OK ? t : 0, msg);
+        evlog::append(evlog::EV_WEB_ACTION, evlog::NO_SLOT, evlog::WA_CERT, ok ? 1 : 0);
+        if (ok) gCertAt = millis() | 1;
+    }
+    free(buf);
+    Serial.printf("[cert] upload: %s\n", msg.c_str());
+    return result(q, ok, ok ? msg + ", reconnecting in a moment" : msg);
+}
+
 esp_err_t hNotFound(httpd_req_t* r, httpd_err_code_t) {
     common(r);
     httpd_resp_set_status(r, "404 Not Found");
@@ -603,6 +656,7 @@ main{max-width:520px;margin:0 auto;padding:2rem 1.3rem}h1{font-size:1.7rem;margi
 </main></body></html>)HTML";
 
 void setupPage() {
+    if (devcert::installed()) return toHttps();   // a trusted certificate: nothing to set up
     gSetup.sendHeader("Cache-Control", "no-store");
     gSetup.send_P(200, "text/html; charset=utf-8", SETUP_HTML);
 }
@@ -613,7 +667,7 @@ void caCert() {
 }
 
 void toHttps() {
-    gSetup.sendHeader("Location", "https://192.168.4.1/");
+    gSetup.sendHeader("Location", devcert::installed() ? String("https://") + devcert::HOST + "/" : "https://192.168.4.1/");
     gSetup.send(301, "text/plain", "use https");
 }
 
@@ -656,12 +710,20 @@ void loadCredentials() {
 const char* apSsid() { return SSID; }
 const char* apPass() { return gApPass; }
 
-void begin() {
+namespace {
+bool startHttps() {
     httpd_ssl_config_t c = HTTPD_SSL_CONFIG_DEFAULT();
-    c.cacert_pem = (const uint8_t*)TLS_SERVER_CERT;
-    c.cacert_len = sizeof(TLS_SERVER_CERT);
-    c.prvtkey_pem = (const uint8_t*)TLS_SERVER_KEY;
-    c.prvtkey_len = sizeof(TLS_SERVER_KEY);
+    if (devcert::installed()) {   // https://door.usezend.app, trusted by every phone
+        c.cacert_pem = (const uint8_t*)devcert::certPem();
+        c.cacert_len = strlen(devcert::certPem()) + 1;
+        c.prvtkey_pem = (const uint8_t*)devcert::keyPem();
+        c.prvtkey_len = strlen(devcert::keyPem()) + 1;
+    } else {                      // https://192.168.4.1 with the local CA
+        c.cacert_pem = (const uint8_t*)TLS_SERVER_CERT;
+        c.cacert_len = sizeof(TLS_SERVER_CERT);
+        c.prvtkey_pem = (const uint8_t*)TLS_SERVER_KEY;
+        c.prvtkey_len = sizeof(TLS_SERVER_KEY);
+    }
     c.httpd.max_open_sockets = 3;   // each TLS session needs ~40 KB of RAM
     c.httpd.max_uri_handlers = 16;
     c.httpd.max_resp_headers = 10;
@@ -671,7 +733,8 @@ void begin() {
     c.httpd.send_wait_timeout = 10;
     if (httpd_ssl_start(&gHttps, &c) != ESP_OK) {
         Serial.println("[web] HTTPS server failed to start");
-        return;
+        gHttps = nullptr;
+        return false;
     }
     reg("/", HTTP_GET, hPage);
     reg("/api/me", HTTP_GET, hMe);
@@ -685,22 +748,53 @@ void begin() {
     reg("/api/verify", HTTP_GET, hVerify);
     reg("/api/action", HTTP_POST, hAction);
     reg("/api/ota", HTTP_POST, hOta);
+    reg("/api/cert", HTTP_GET, hCertGet);
+    reg("/api/cert", HTTP_POST, hCertPut);
     httpd_register_err_handler(gHttps, HTTPD_404_NOT_FOUND, hNotFound);
+    return true;
+}
 
+const char* appUrl() { return devcert::installed() ? "https://door.usezend.app" : "https://192.168.4.1"; }
+}  // namespace
+
+void begin() {
+    devcert::begin();   // the radio is on now, so the hardware RNG is good for a new key
+    startHttps();
     gSetup.on("/", HTTP_GET, setupPage);
     gSetup.on("/ca.crt", HTTP_GET, caCert);
     gSetup.onNotFound(toHttps);
     gSetup.begin();
-    Serial.println("[web] app on https://192.168.4.1 (setup page on http). Type 'wifi' for the passwords");
+    // Only door.usezend.app is answered; other names get "does not exist".
+    gDns.start(53, devcert::HOST, WiFi.softAPIP());
+    Serial.printf("[web] app on %s (also https://192.168.4.1; setup page on http). Type 'wifi' for the passwords\n",
+                  appUrl());
 }
 
-void service() { gSetup.handleClient(); }
+void service() {
+    gSetup.handleClient();
+    gDns.processNextRequest();
+    // A new certificate: restart HTTPS once the upload's reply has gone out.
+    if (gCertAt && millis() - gCertAt > 1500 && devcert::pending()) {
+        gCertAt = 0;
+        if (gHttps) httpd_ssl_stop(gHttps);
+        gHttps = nullptr;
+        devcert::activate();
+        Serial.println(startHttps() ? "[cert] HTTPS restarted with the new certificate" : "[cert] HTTPS restart failed");
+    }
+}
+
+void certInstalled() { gCertAt = millis() | 1; }
+
 
 void printCredentials() {
     Serial.printf("WiFi network : %s\n", SSID);
     Serial.printf("WiFi password: %s\n", gApPass);
-    Serial.printf("First time   : http://%s  (installs the certificate)\n", WiFi.softAPIP().toString().c_str());
-    Serial.printf("Door app     : https://%s\n", WiFi.softAPIP().toString().c_str());
+    if (devcert::installed()) {
+        Serial.printf("Door app     : https://%s\n", devcert::HOST);
+    } else {
+        Serial.printf("First time   : http://%s  (installs the certificate)\n", WiFi.softAPIP().toString().c_str());
+        Serial.printf("Door app     : https://%s\n", WiFi.softAPIP().toString().c_str());
+    }
     if (gInitPass[0]) Serial.printf("Admin password (first-boot, change it in the app): %s\n", gInitPass);
     else Serial.println("Admin password: changed by the user (reset with 'webpass <new>')");
     Serial.printf("Firmware v%d, clients connected: %u, free heap %u bytes\n", ATDS_FW_VERSION, WiFi.softAPgetStationNum(),

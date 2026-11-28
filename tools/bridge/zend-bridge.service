@@ -1,0 +1,24 @@
+[Unit]
+Description=Zend bridge: trusted HTTPS for the ATDS door app (@HOST@)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=zend-bridge
+Group=zend-bridge
+ExecStart=/usr/bin/python3 /opt/zend-bridge/zend_bridge.py --host @HOST@ \
+  --cert /etc/zend-bridge/fullchain.pem --key /etc/zend-bridge/key.pem \
+  --door-ca /etc/zend-bridge/door/ca.crt
+Restart=always
+RestartSec=3
+# Ports 80/443 without running as root
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadOnlyPaths=/etc/zend-bridge
+
+[Install]
+WantedBy=multi-user.target
