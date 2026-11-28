@@ -29,7 +29,7 @@ EVENTS = ["?", "BOOT", "GRANTED", "DENIED_PIN", "DENIED_CARD", "DENIED_NO_PIN", 
           "FAULT", "CARD_ADDED", "CARD_REMOVED", "PIN_CHANGED", "WIPE", "TIME_SET", "CLOCK_JUMP",
           "CLOCK_BACKWARDS", "TIME_INVALID", "LOG_ROLLBACK", "LOG_REPAIRED", "LOCKOUT_RESET", "LATCH_RELEASED",
           "WEB_LOGIN", "WEB_LOGIN_FAIL", "PHONE_PIN", "WEB_ACTION",
-          "OTA_START", "OTA_INSTALLED", "OTA_FAIL", "OTA_CONFIRMED", "OTA_ROLLED_BACK"]
+          "OTA_START", "OTA_INSTALLED", "OTA_FAIL", "OTA_CONFIRMED", "OTA_ROLLED_BACK", "HOME_WIFI", "ZEND_COMMAND", "ZEND_ANCHOR", "ZEND_ALERT"]
 WARN_EVENTS = {"OTA_FAIL", "OTA_ROLLED_BACK", "OTA_INSTALLED", "TIME_SET", "CLOCK_JUMP", "CLOCK_BACKWARDS", "TIME_INVALID", "LOG_ROLLBACK", "LOG_REPAIRED", "WIPE"}
 RTC_OK, RTC_LOST = 1, 2
 TOLERANCE = 5
@@ -75,6 +75,9 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--file", help="saved output of the console command 'log dump'")
     ap.add_argument("--all", action="store_true", help="print every record, not just warnings")
+    ap.add_argument("--anchor", action="append", default=[], metavar="SEQ-TAG",
+                    help="a log_head reading from Zend (its reference, e.g. 412-3fa0...); repeatable. "
+                         "The log must contain that exact record, so history before it was not rewritten")
     args = ap.parse_args()
     text = open(args.file).read() if args.file else read_board()
 
@@ -87,6 +90,13 @@ def main():
 
     key = hmac.new(psk(), b"ATDS log key v1", hashlib.sha256).digest()
     problems, warnings, last_time = [], [], 0
+    anchors = {}
+    for a in args.anchor:
+        m2 = re.fullmatch(r"(\d+)-([0-9a-f]{32})", a.strip())
+        if not m2:
+            sys.exit(f"bad --anchor {a!r}: expected <seq>-<32 hex>")
+        anchors[int(m2[1])] = bytes.fromhex(m2[2])
+    anchors_ok = 0
     expect = anchor_seq
     for raw in recs:
         body, tag = raw[:32], raw[32:]
@@ -112,6 +122,11 @@ def main():
             warnings.append(line)
         if args.all:
             print(("   " if good else "!! ") + line)
+        if seq in anchors:
+            if hmac.compare_digest(anchors[seq], tag):
+                anchors_ok += 1
+            else:
+                problems.append(f"#{seq}: differs from the copy anchored on Zend: history was rewritten")
         prev, expect = tag, seq + 1
         if problems and not args.all:
             break
@@ -120,6 +135,13 @@ def main():
                         "records removed from the end, or the log was rolled back")
 
     print(f"\n{len(recs)} record(s), anchor #{anchor_seq}, head #{head_seq}")
+    for seq in sorted(anchors):
+        if seq < anchor_seq:
+            warnings.append(f"Zend anchor #{seq} is older than the oldest record kept on the door (#{anchor_seq})")
+        elif seq > head_seq:
+            problems.append(f"Zend has anchor #{seq} but the log ends at #{head_seq}: records were removed")
+    if anchors:
+        print(f"{anchors_ok} of {len(anchors)} Zend anchor(s) match")
     for w in warnings:
         print(f"WARN  {w}")
     for p in problems:

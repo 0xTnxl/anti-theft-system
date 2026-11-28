@@ -45,6 +45,7 @@ void statusJson(String& out);
 void publicJson(String& out);
 void cardsJson(String& out);
 bool lock(String& msg);
+void summary(String& out);   // one plain sentence, for the owner's phone
 bool clearAlarm(String& msg);
 bool resetLockout(String& msg);
 bool startEnroll(String& msg);

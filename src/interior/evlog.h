@@ -56,7 +56,13 @@ enum Event : uint8_t {
     EV_OTA_FAIL = 34,        // detail 1 = rejected (signature/version/target), 2 = transfer/verify; arg1 = version
     EV_OTA_CONFIRMED = 35,   // new firmware ran healthily; arg1 = version
     EV_OTA_ROLLED_BACK = 36, // the update did not survive and the old firmware returned; arg1 = failed version
+    EV_HOME_WIFI = 37,       // detail 1 = joined, 0 = lost; arg1 = router channel
+    EV_ZEND_COMMAND = 38,    // detail = ZendCommand, arg1 = 1 done / 0 refused, arg2 = Zend event seq
+    EV_ZEND_ANCHOR = 39,     // the log head was sent to Zend; arg1 = head seq sent
+    EV_ZEND_ALERT = 40,      // detail = alert kind sent to the owner's phone
 };
+enum ZendCommand : uint8_t { ZC_UNKNOWN = 0, ZC_LOCK = 1, ZC_STATUS = 2, ZC_GUEST = 3, ZC_GUEST_CANCEL = 4,
+                             ZC_STALE = 5, ZC_CONFIG = 6 };
 
 enum RtcState : uint8_t { RTC_NONE = 0, RTC_OK = 1, RTC_LOST_POWER = 2, RTC_ERROR = 3 };
 
@@ -84,7 +90,7 @@ constexpr uint8_t NO_SLOT = 0xFF;
 
 enum WebAction : uint8_t { WA_LOCK = 1, WA_CLEAR = 2, WA_RESET_LOCKOUT = 3, WA_ENROLL = 4, WA_SETPIN = 5,
                            WA_DELETE = 6, WA_TIME = 7, WA_PASSWORD = 8, WA_CANCEL = 9,
-                           WA_NAME = 10, WA_CERT = 11 };
+                           WA_NAME = 10, WA_CERT = 11, WA_HOMEWIFI = 12, WA_ZEND = 13 };
 
 // Newest `lastN` records, oldest first.
 typedef void (*RecordFn)(const Record& r, void* ctx);
@@ -99,6 +105,9 @@ uint32_t now(uint8_t* state);         // current RTC time as logged
 
 uint32_t count();                     // retained records
 uint32_t headSeq();
+typedef void (*Observer)(uint8_t event, uint8_t detail, uint32_t arg1);
+void setObserver(Observer fn);         // called after each record is written (zend_link alerts)
+void headTag(uint8_t out[16]);         // chain tag of the newest record (sent to Zend as an anchor)
 uint32_t bootCount();                 // this power-up's boot number
 // Walks the whole retained chain. Returns true if it is intact. *checked =
 // records verified, *badSeq = first failing seq (0 if none), *backwards =

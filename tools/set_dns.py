@@ -2,9 +2,9 @@
 """Point door.usezend.app at the bridge's address on the home network (name.com API v4).
 
     export NAMECOM_USER=<name.com username>  NAMECOM_TOKEN=<API token>
-    python3 tools/bridge/set_dns.py                 # uses this PC's address on the default route
-    python3 tools/bridge/set_dns.py --ip 192.168.1.50
-    python3 tools/bridge/set_dns.py --show
+    python3 tools/set_dns.py                 # uses this PC's address on the default route
+    python3 tools/set_dns.py --ip 192.168.1.50
+    python3 tools/set_dns.py --show
 
 Creates or updates one A record (TTL 300). The address is private (home
 network only), which is intended: phones reach it at home, and from away

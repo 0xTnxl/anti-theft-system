@@ -214,7 +214,9 @@ dl.kv dt{color:var(--mute)}dl.kv dd{margin:0;text-align:right;font-variant-numer
      <div class="li"><div><b>Keypad</b><p class="mute small" id="lockoutTxt"></p></div><button class="btn sm" onclick="act('resetlockout')" id="lockoutBtn">End the pause</button></div>
      <div class="li"><div><b>Clock</b><p class="mute small" id="clockTxt"></p></div><button class="btn sm" onclick="syncTime()">Set from this device</button></div>
      <div class="li"><div><b>App password</b><p class="mute small">Used to sign in to this app</p></div><button class="btn sm" onclick="chpw()">Change</button></div>
-     <div class="li"><div><b>Secure address</b><p class="mute small" id="certTxt"></p></div><label class="btn sm">Upload<input type="file" id="certFile" accept=".pem,.cer,.crt" hidden onchange="upCert(this)"></label></div></div>
+     <div class="li"><div><b>Secure address</b><p class="mute small" id="certTxt"></p></div><label class="btn sm">Upload<input type="file" id="certFile" accept=".pem,.cer,.crt" hidden onchange="upCert(this)"></label></div>
+     <div class="li"><div><b>Home WiFi</b><p class="mute small" id="homeTxt"></p></div><button class="btn sm" onclick="homeWifi()">Set up</button></div>
+     <div class="li"><div><b>Zend</b><p class="mute small" id="zendTxt"></p></div><button class="btn sm" onclick="zendLink()" id="zendBtn">Link</button></div></div>
     <details class="card tech"><summary>Technical details</summary><dl class="kv" id="techDl"></dl></details>
     <button class="btn big ghost danger" onclick="logout()">Sign out</button>
    </div>
@@ -298,7 +300,7 @@ const ALARMS={FORCED_DOOR:'the door was opened while it was locked',VIBRATION:'t
  TAMPER_RF:'someone sent fake signals to the lock',BOLT_TAMPER:'the bolt was moved by hand',MOTION:'someone moved near the door while it was locked'};
 const ALARM_BY_D=['','FORCED_DOOR','VIBRATION','TAMPER_LINK','TAMPER_RF','BOLT_TAMPER','MOTION'];
 const WA_TXT=['','The door was locked','The alarm was switched off','The keypad pause was ended','Adding a card was started','Changing the PIN was started',
- 'A card was removed','The clock was set','The app password was changed','A change was cancelled','A card was renamed','The secure address was renewed'];
+ 'A card was removed','The clock was set','The app password was changed','A change was cancelled','A card was renamed','The secure address was renewed','The home WiFi was changed','The Zend link was changed'];
 const who=s=>NAMES[s]||('Card '+(s+1));
 const lastOf=f=>{for(let i=EV.length-1;i>=0;i--)if(f(EV[i]))return EV[i];return null};
 const uniq=a=>a.filter((x,i)=>a.indexOf(x)==i);
@@ -351,6 +353,10 @@ function describe(e){const w=e.slot>=0?who(e.slot):'Someone';
  case'WEB_LOGIN':return{k:'info',s:0,t:'Someone signed in to this app'};
  case'WEB_LOGIN_FAIL':return{k:'warn',s:1,t:'Someone typed the wrong app password'};
  case'PHONE_PIN':return{k:'info',s:0,t:'A PIN was sent from a phone'};
+ case'ZEND_COMMAND':return{k:e.d==1&&e.a1?'lock':'info',s:e.d==1?1:0,t:e.d==1?(e.a1?'The door was locked from the Zend app':"A lock request from the Zend app didn't work"):e.d==5?'An old request from the Zend app was ignored':'The Zend app asked about the door'};
+ case'ZEND_ALERT':return{k:'info',s:0,t:'An alert was sent to your phone'};
+ case'ZEND_ANCHOR':return{k:'info',s:0,t:'Your history was sealed with Zend'};
+ case'HOME_WIFI':return{k:e.d?'info':'warn',s:0,t:e.d?'The door joined your home WiFi':'The door lost your home WiFi'};
  case'WEB_ACTION':return{k:e.d==1?'lock':'info',s:e.d==1?1:0,t:(WA_TXT[e.d]||'A change was made')+' from the app'+(e.a1?'':", but it didn't work")}}
  return{k:'info',s:0,t:e.ev}}
 const KI={in:'in',lock:'lock',warn:'alert',bad:'alert',info:'dot'};
@@ -420,7 +426,15 @@ function certDays(){if(!S||!S.certTo)return null;const now=S.rtc==1?S.time:Date.
 async function upCert(inp){const f=inp.files[0];inp.value='';if(!f)return;let j;
  try{const r=await fetch('/api/cert',{method:'POST',credentials:'same-origin',headers:{'X-ATDS':'1','Content-Type':'application/x-pem-file'},body:await f.text()});j=await r.json()}catch(e){toast("I couldn't reach the door.");return}
  toast(friendly(j.msg));if(j.ok)setTimeout(()=>location.reload(),4000)}
-function renderSettings(){const cd=certDays();
+function homeWifi(){sheet('Home WiFi','<p class="mute">Lets the door send alerts to your phone through Zend. The door keeps working without it.</p><label for="hs">Network name</label><input type="text" id="hs" maxlength="32" autocomplete="off" value="'+esc(S&&S.home?S.home.ssid:'')+'"><label for="hp">Password</label><input type="password" id="hp" maxlength="64" autocomplete="off">',
+ [['Save','pri',async()=>{await act('homewifi',{ssid:$('hs').value,pass:$('hp').value})}],['Switch off','ghost',async()=>{await act('homewifi',{ssid:'',pass:''})}],['Cancel','ghost']])}
+function zendLink(){if(S&&S.zend&&S.zend.paired){sheet('Unlink from Zend?','<p class="mute">Alerts and remote locking will stop. The door keeps working.</p>',[['Yes, unlink','pri danger',()=>{act('zend',{off:'1'})}],['Keep it','ghost']]);return}
+ sheet('Link to Zend','<p class="mute">On a computer run <b>zend device pair "Front door"</b>, approve it in the Zend app, then copy the two values here.</p><label for="zk">Device key</label><input type="text" id="zk" placeholder="zdevice_live_…" autocomplete="off"><label for="zs">Signing secret</label><input type="password" id="zs" placeholder="zdsig_…" autocomplete="off">',
+ [['Link','pri',async()=>{await act('zend',{key:$('zk').value,secret:$('zs').value})}],['Cancel','ghost']])}
+function renderSettings(){const cd=certDays();const H=S.home||{},Z=S.zend||{};
+ $('homeTxt').textContent=!H.set?'Not set up':H.up?'Connected to '+H.ssid:'Trying to reach '+H.ssid;
+ $('zendTxt').textContent=!Z.paired?'Not linked: alerts stay on this WiFi only':Z.online?'Linked: alerts go to your phone':H.up?'Linked, Zend not reachable right now':'Linked, needs home WiFi';
+ $('zendBtn').textContent=Z.paired?'Unlink':'Link';
  $('certTxt').textContent=cd===null?'Not set up yet: the app uses 192.168.4.1':(S.certTest?'Test certificate, ':'door.usezend.app, ')+(cd<=0?'expired':`renew within ${cd} ${cd==1?'day':'days'}`);$('alarmTxt').textContent=S.alarm=='NONE'?'No alarm right now':'On: '+(ALARMS[S.alarm]||S.alarm);$('clearBtn').disabled=S.alarm=='NONE';
  $('lockoutTxt').textContent=S.lockout?`Taking a break for ${S.lockout} more seconds`:(S.fails?`${S.fails} wrong ${S.fails==1?'try':'tries'} in a row`:'Ready');
  $('lockoutBtn').disabled=!S.lockout&&!S.fails;

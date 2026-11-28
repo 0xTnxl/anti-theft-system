@@ -17,6 +17,7 @@
 #include "devcert.h"
 #include "espnow_transport.h"
 #include "evlog.h"
+#include "homenet.h"
 #include "intrusion.h"
 #include "mbedtls/platform_util.h"
 #include "motor.h"
@@ -27,6 +28,7 @@
 #include "ota.h"
 #include "version.h"
 #include "web.h"
+#include "zend_link.h"
 
 // ATDS_SIM_BOLT (env:interior_sim): no motor at all, a virtual encoder.
 // ATDS_BENCH (env:interior_bench): real motor, door from the console, no end
@@ -1134,6 +1136,8 @@ void runCommand(char* cmd, uint32_t now) {
     if (!strcmp(cmd, "help")) {
         Serial.println("status | enroll | setpin | cancel | list | delete <slot> | wipe yes | identify [s]");
         Serial.println("wifi | wifi pass <new> | webpass <new> | cert | cert csr | cert begin");
+        Serial.println("homewifi | homewifi set <name> | <password> | homewifi off");
+        Serial.println("zend | zend key <zdevice_...> | zend secret <zdsig_...> | zend test | zend off");
         Serial.println("time | time set YYYY-MM-DDTHH:MM:SS (UTC) | log show [n] | log verify | log dump");
         if (CONSOLE_TEST_COMMANDS) Serial.println("test: lock | unlock | arm | disarm | clear | resetlockout");
     } else if (!strcmp(cmd, "status")) {
@@ -1141,6 +1145,36 @@ void runCommand(char* cmd, uint32_t now) {
     } else if (!strcmp(cmd, "wifi")) {
         if (arg && !strncmp(arg, "pass ", 5)) Serial.println(web::setApPass(arg + 5) ? "WiFi password saved: reboot to apply" : "8-32 characters");
         else web::printCredentials();
+    } else if (!strcmp(cmd, "homewifi")) {
+        if (arg && !strcmp(arg, "off")) {
+            homenet::set("", "");
+            Serial.println("home WiFi off");
+        } else if (arg && !strncmp(arg, "set ", 4)) {
+            char* bar = strstr(arg + 4, " | ");
+            if (!bar) {
+                Serial.println("format: homewifi set <network name> | <password>");
+            } else {
+                *bar = 0;
+                const bool ok = homenet::set(arg + 4, bar + 3);
+                memset(bar + 3, 0, strlen(bar + 3));
+                Serial.println(ok ? "saved, joining (the exterior follows the new channel by itself)"
+                                  : "name up to 32 characters, password 8-64");
+            }
+        } else {
+            homenet::printStatus();
+        }
+    } else if (!strcmp(cmd, "zend")) {
+        if (arg && !strncmp(arg, "key ", 4)) Serial.println(zendlink::setKey(arg + 4) ? "device key saved" : "expected zdevice_...");
+        else if (arg && !strncmp(arg, "secret ", 7)) Serial.println(zendlink::setSecret(arg + 7) ? "signing secret saved" : "expected zdsig_...");
+        else if (arg && !strcmp(arg, "off")) {
+            zendlink::forget();
+            Serial.println("Zend key and secret removed from this door");
+        } else if (arg && !strcmp(arg, "test")) {
+            zendlink::testAlert();
+            Serial.println("test alert queued");
+        } else {
+            zendlink::printStatus();
+        }
     } else if (!strcmp(cmd, "cert")) {
         certCommand(arg);
     } else if (!strcmp(cmd, "webpass") && arg) {
@@ -1376,7 +1410,9 @@ void setup() {
         ESP.restart();
     }
     gLink.begin(slink::Role::Interior, ATDS_PSK, ATDS_MAC_EXTERIOR, ATDS_MAC_INTERIOR, rng);
+    homenet::begin();
     web::begin();
+    zendlink::begin();
     gLastRxMs = millis();
 
     simDoor(millis());
@@ -1405,6 +1441,7 @@ void loopBody() {
     if (!SIM_DOOR) gDoorClosed.update(now);   // test builds: door comes from the console
     simDoor(now);
 
+    homenet::service(now);
     serviceLink(now);
     // serviceLink can take ~0.5 s (PIN hash) and may have started the motor:
     // later steps must not see a time from before that.
@@ -1466,6 +1503,24 @@ void statusJson(String& out) {
              (unsigned long)(now / 1000), (unsigned long)evlog::bootCount(), ATDS_FW_VERSION, intrusion::vibrationActive(), intrusion::motionActive(), buildName(),
              (unsigned long)devcert::notAfter(), devcert::staging() ? "true" : "false");
     out = b;
+    out.remove(out.length() - 1);   // add the network parts before the closing brace
+    out += ',';
+    homenet::statusJson(out);
+    out += ',';
+    zendlink::statusJson(out);
+    out += '}';
+}
+
+// One sentence for the owner's phone (Zend "status" command).
+void summary(String& out) {
+    const uint32_t now = millis();
+    out = gLock == proto::LOCK_LOCKED ? "Your door is locked" : gLock == proto::LOCK_LOCKING ? "Your door is locking"
+        : gLock == proto::LOCK_FAULT ? "The lock has a fault" : "Your door is not locked";
+    out += gDoorClosed.stable ? " and closed." : " and open.";
+    if (gAlarm != proto::ALARM_NONE) out += " The alarm is on.";
+    if (!gLink.established(now)) out += " The keypad outside is not answering.";
+    if (lockoutLeftS(now)) out += " The keypad is paused after wrong PINs.";
+    if (gAlarm == proto::ALARM_NONE && gLink.established(now)) out += " Everything else is fine.";
 }
 
 // For the phone-PIN page: no admin login, so nothing sensitive.

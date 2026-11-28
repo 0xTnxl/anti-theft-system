@@ -118,6 +118,8 @@ uint8_t readTime(uint32_t* t) {
     return lost ? RTC_LOST_POWER : RTC_OK;
 }
 
+Observer gObserver = nullptr;
+
 bool writeRecord(Event e, uint8_t slot, uint8_t detail, uint32_t arg1, uint32_t arg2, uint32_t t,
                  uint8_t state) {
     Record r = {};
@@ -158,6 +160,7 @@ bool writeRecord(Event e, uint8_t slot, uint8_t detail, uint32_t arg1, uint32_t 
     gHead.file = f;
     if (state == RTC_OK && t > gHead.lastRtc) gHead.lastRtc = t;
     saveHead();
+    if (gObserver) gObserver(e, detail, arg1);
     return true;
 }
 
@@ -197,7 +200,7 @@ const char* eventName(uint8_t e) {
                               "TIME_SET",   "CLOCK_JUMP",   "CLOCK_BACKWARDS", "TIME_INVALID", "LOG_ROLLBACK",
                               "LOG_REPAIRED", "LOCKOUT_RESET", "LATCH_RELEASED", "WEB_LOGIN", "WEB_LOGIN_FAIL",
                               "PHONE_PIN",  "WEB_ACTION",   "OTA_START",     "OTA_INSTALLED", "OTA_FAIL",
-                              "OTA_CONFIRMED", "OTA_ROLLED_BACK"};
+                              "OTA_CONFIRMED", "OTA_ROLLED_BACK", "HOME_WIFI", "ZEND_COMMAND", "ZEND_ANCHOR", "ZEND_ALERT"};
     return e < sizeof(n) / sizeof(n[0]) ? n[e] : "?";
 }
 
@@ -294,6 +297,8 @@ uint32_t now(uint8_t* state) {
     return t;
 }
 
+void setObserver(Observer fn) { gObserver = fn; }
+void headTag(uint8_t out[16]) { memcpy(out, gHead.tag, 16); }
 uint32_t headSeq() { return gHead.seq; }
 uint32_t bootCount() { return gBoot; }
 

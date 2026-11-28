@@ -13,6 +13,7 @@
 #include "credentials.h"
 #include "devcert.h"
 #include "evlog.h"
+#include "homenet.h"
 #include "mbedtls/md.h"
 #include "mbedtls/pkcs5.h"
 #include "mbedtls/platform_util.h"
@@ -20,6 +21,7 @@
 #include "tls_guard.h"
 #include "version.h"
 #include "web_page.h"
+#include "zend_link.h"
 
 namespace web {
 namespace {
@@ -517,6 +519,32 @@ esp_err_t hAction(httpd_req_t* r) {
             else gPrefs.remove(k);
             ok = true;
             msg = n.length() ? "name saved" : "name removed";
+        }
+    } else if (a == "homewifi") {
+        code = evlog::WA_HOMEWIFI;
+        String ssid = q.arg("ssid"), pass = q.arg("pass");
+        ssid.trim();
+        ok = homenet::set(ssid.c_str(), pass.c_str());
+        msg = !ok ? "network name up to 32 characters, password 8 to 64"
+              : ssid.length() ? "joining your home WiFi" : "home WiFi switched off";
+        for (unsigned i = 0; i < pass.length(); i++) pass.setCharAt(i, '0');
+        for (unsigned i = 0; i < q.body.length(); i++) q.body.setCharAt(i, '0');
+    } else if (a == "zend") {
+        code = evlog::WA_ZEND;
+        if (q.arg("off") == "1") {
+            zendlink::forget();
+            ok = true;
+            msg = "this door is no longer linked to Zend";
+        } else {
+            String key = q.arg("key"), sec = q.arg("secret");
+            key.trim();
+            sec.trim();
+            if (!key.startsWith("zdevice_") || !sec.startsWith("zdsig_")) msg = "the key starts with zdevice_ and the secret with zdsig_";
+            else ok = zendlink::setKey(key.c_str()) && zendlink::setSecret(sec.c_str());
+            if (ok) msg = "linked to Zend";
+            else if (!msg.length()) msg = "that key or secret is too long";
+            for (unsigned i = 0; i < sec.length(); i++) sec.setCharAt(i, '0');
+            for (unsigned i = 0; i < q.body.length(); i++) q.body.setCharAt(i, '0');
         }
     } else {
         return result(q, false, "unknown action");
