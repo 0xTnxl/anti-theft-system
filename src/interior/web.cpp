@@ -655,8 +655,16 @@ main{max-width:520px;margin:0 auto;padding:2rem 1.3rem}h1{font-size:1.7rem;margi
 <small>If your phone still warns that the connection is not private, step 1 is not finished.</small></div>
 </main></body></html>)HTML";
 
+void toHttps() {
+    gSetup.sendHeader("Location", devcert::installed() ? String("https://") + devcert::HOST + "/" : "https://192.168.4.1/");
+    gSetup.send(301, "text/plain", "use https");
+}
+
 void setupPage() {
-    if (devcert::installed()) return toHttps();   // a trusted certificate: nothing to set up
+    if (devcert::installed()) {   // a trusted certificate: nothing to set up
+        toHttps();
+        return;
+    }
     gSetup.sendHeader("Cache-Control", "no-store");
     gSetup.send_P(200, "text/html; charset=utf-8", SETUP_HTML);
 }
@@ -666,10 +674,6 @@ void caCert() {
     gSetup.send_P(200, "application/x-x509-ca-cert", (const char*)TLS_CA_DER, sizeof(TLS_CA_DER));
 }
 
-void toHttps() {
-    gSetup.sendHeader("Location", devcert::installed() ? String("https://") + devcert::HOST + "/" : "https://192.168.4.1/");
-    gSetup.send(301, "text/plain", "use https");
-}
 
 void reg(const char* uri, httpd_method_t m, esp_err_t (*fn)(httpd_req_t*)) {
     httpd_uri_t u = {};
@@ -766,8 +770,8 @@ void begin() {
     gSetup.begin();
     // Only door.usezend.app is answered; other names get "does not exist".
     gDns.start(53, devcert::HOST, WiFi.softAPIP());
-    Serial.printf("[web] app on %s (also https://192.168.4.1; setup page on http). Type 'wifi' for the passwords\n",
-                  appUrl());
+    Serial.printf("[web] app on %s%s. Type 'wifi' for the passwords\n", appUrl(),
+                  devcert::installed() ? " (also https://192.168.4.1)" : " (setup page on http)");
 }
 
 void service() {

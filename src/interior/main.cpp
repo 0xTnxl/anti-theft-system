@@ -14,6 +14,7 @@
 #include "config_common.h"
 #include "config_interior.h"
 #include "credentials.h"
+#include "devcert.h"
 #include "espnow_transport.h"
 #include "evlog.h"
 #include "intrusion.h"
@@ -1027,7 +1028,9 @@ void serviceLink(uint32_t now) {
 
 // --------------------------------------------------------------- console ---
 
-char gLine[64];
+char gLine[128];   // long enough for a PEM line during "cert begin"
+String gCertRx;    // certificate being received over the console
+bool gCertRxOn = false;
 uint8_t gLineLen = 0;
 
 void printTime(uint32_t t, uint8_t st) {
@@ -1072,13 +1075,65 @@ void startAdmin(Admin a, uint32_t now) {
     gStatusDirty = true;
 }
 
+void certCommand(const char* arg) {
+    if (arg && !strcmp(arg, "csr")) {
+        String csr;
+        if (!devcert::csrPem(csr)) Serial.println("[cert] no key");
+        else Serial.print(csr);
+    } else if (arg && !strcmp(arg, "begin")) {
+        gCertRx = "";
+        gCertRxOn = true;
+        Serial.println("[cert] paste the full-chain PEM, then type: cert end");
+    } else {
+        Serial.printf("[cert] host %s, key %s\n", devcert::HOST, devcert::keyPem()[0] ? "on this door" : "MISSING");
+        if (!devcert::installed() && !devcert::pending()) {
+            Serial.println("[cert] no certificate: the app uses https://192.168.4.1 (local CA)");
+            return;
+        }
+        Serial.printf("[cert] issuer %s%s, valid until ", devcert::issuer(), devcert::staging() ? " (STAGING, not trusted)" : "");
+        printTime(devcert::notAfter(), evlog::RTC_OK);
+        Serial.println();
+    }
+}
+
+// While receiving a certificate every line is PEM, until "cert end".
+bool certReceive(const char* line) {
+    if (!gCertRxOn) return false;
+    if (!line[0]) return true;   // CR LF gives an empty line
+    if (!strcmp(line, "cert abort")) {
+        gCertRxOn = false;
+        gCertRx = "";
+        Serial.println("[cert] cancelled");
+    } else if (!strcmp(line, "cert end")) {
+        gCertRxOn = false;
+        uint8_t st;
+        const uint32_t t = evlog::now(&st);
+        String msg;
+        const bool ok = devcert::install(gCertRx.c_str(), gCertRx.length(), st == evlog::RTC_OK ? t : 0, msg);
+        evlog::append(evlog::EV_WEB_ACTION, evlog::NO_SLOT, evlog::WA_CERT, ok ? 1 : 0);
+        if (ok) web::certInstalled();
+        Serial.printf("[cert] %s: %s\n", ok ? "OK" : "FAILED", msg.c_str());
+        gCertRx = "";
+    } else if (gCertRx.length() + strlen(line) + 1 > devcert::MAX_CHAIN) {
+        gCertRxOn = false;
+        gCertRx = "";
+        Serial.println("[cert] FAILED: too long");
+    } else {
+        gCertRx += line;
+        gCertRx += '\n';
+        Serial.println("ok");
+    }
+    return true;
+}
+
 void runCommand(char* cmd, uint32_t now) {
+    if (certReceive(cmd)) return;
     char* arg = strchr(cmd, ' ');
     if (arg) *arg++ = 0;
 
     if (!strcmp(cmd, "help")) {
         Serial.println("status | enroll | setpin | cancel | list | delete <slot> | wipe yes | identify [s]");
-        Serial.println("wifi | wifi pass <new> | webpass <new>");
+        Serial.println("wifi | wifi pass <new> | webpass <new> | cert | cert csr | cert begin");
         Serial.println("time | time set YYYY-MM-DDTHH:MM:SS (UTC) | log show [n] | log verify | log dump");
         if (CONSOLE_TEST_COMMANDS) Serial.println("test: lock | unlock | arm | disarm | clear | resetlockout");
     } else if (!strcmp(cmd, "status")) {
@@ -1086,6 +1141,8 @@ void runCommand(char* cmd, uint32_t now) {
     } else if (!strcmp(cmd, "wifi")) {
         if (arg && !strncmp(arg, "pass ", 5)) Serial.println(web::setApPass(arg + 5) ? "WiFi password saved: reboot to apply" : "8-32 characters");
         else web::printCredentials();
+    } else if (!strcmp(cmd, "cert")) {
+        certCommand(arg);
     } else if (!strcmp(cmd, "webpass") && arg) {
         Serial.println(web::setAdminPass(arg) ? "dashboard password changed, all devices logged out" : "8-64 characters");
     } else if (!strcmp(cmd, "identify")) {
@@ -1397,7 +1454,8 @@ void statusJson(String& out) {
              "{\"lock\":\"%s\",\"position\":%.2f,\"door\":\"%s\",\"sw1\":%d,\"sw2\":%d,\"armed\":%d,\"disarmed\":%d,"
              "\"motor\":\"%s\",\"alarm\":\"%s\",\"link\":%s,\"lastRx\":%lu,\"cards\":%u,\"maxCards\":%u,\"pinSet\":%s,"
              "\"fails\":%lu,\"lockout\":%u,\"adminMode\":\"%s\",\"phonePin\":%lu,\"logCount\":%lu,\"logHead\":%lu,"
-             "\"time\":%lu,\"rtc\":%u,\"uptime\":%lu,\"boot\":%lu,\"fw\":%d,\"vibration\":%d,\"motion\":%d,\"build\":\"%s\"}",
+             "\"time\":%lu,\"rtc\":%u,\"uptime\":%lu,\"boot\":%lu,\"fw\":%d,\"vibration\":%d,\"motion\":%d,\"build\":\"%s\","
+             "\"certTo\":%lu,\"certTest\":%s}",
              lockName(gLock), (double)rel() / COUNTS_PER_TURN, gDoorClosed.stable ? "closed" : "open", gSwLocked.stable,
              gSwLatch.stable, gArmedPrev, gDisarmed, gMotorOn ? "running" : gHoldOn ? "holding" : "off",
              alarmName(gAlarm), gLink.established(now) ? "true" : "false", (unsigned long)((now - gLastRxMs) / 1000),
@@ -1405,7 +1463,8 @@ void statusJson(String& out) {
              lockoutLeftS(now), gAdmin == Admin::Enroll ? "enroll" : gAdmin == Admin::SetPin ? "setpin" : "none",
              (unsigned long)(phonePinActive(now) ? (gPhonePinUntil - now + 999) / 1000 : 0),
              (unsigned long)evlog::count(), (unsigned long)evlog::headSeq(), (unsigned long)t, st,
-             (unsigned long)(now / 1000), (unsigned long)evlog::bootCount(), ATDS_FW_VERSION, intrusion::vibrationActive(), intrusion::motionActive(), buildName());
+             (unsigned long)(now / 1000), (unsigned long)evlog::bootCount(), ATDS_FW_VERSION, intrusion::vibrationActive(), intrusion::motionActive(), buildName(),
+             (unsigned long)devcert::notAfter(), devcert::staging() ? "true" : "false");
     out = b;
 }
 

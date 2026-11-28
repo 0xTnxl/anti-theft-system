@@ -84,7 +84,7 @@ constexpr uint8_t NO_SLOT = 0xFF;
 
 enum WebAction : uint8_t { WA_LOCK = 1, WA_CLEAR = 2, WA_RESET_LOCKOUT = 3, WA_ENROLL = 4, WA_SETPIN = 5,
                            WA_DELETE = 6, WA_TIME = 7, WA_PASSWORD = 8, WA_CANCEL = 9,
-                           WA_NAME = 10 };
+                           WA_NAME = 10, WA_CERT = 11 };
 
 // Newest `lastN` records, oldest first.
 typedef void (*RecordFn)(const Record& r, void* ctx);

@@ -1,7 +1,10 @@
 // Dashboard served by the interior over its own WPA2 access point.
 //
-//   https://192.168.4.1   the app (TLS, certificate from tools/gen_device_keys.py)
-//   http://192.168.4.1    setup page only: download ca.crt, then go to https
+//   https://door.usezend.app  the app, with a Let's Encrypt certificate for the
+//                             door's own key (devcert.h, tools/renew_cert.py).
+//                             The door's DNS answers that name on its WiFi.
+//   https://192.168.4.1   before a certificate is installed: local-CA certificate
+//   http://192.168.4.1    redirect to the app (or the local-CA setup page)
 //
 // Two levels of access:
 //   anyone on the WiFi:  the phone-PIN page (/api/public, /api/phonepin)
@@ -24,6 +27,7 @@ void service();             // call every loop (setup page on port 80)
 void lock();
 void unlock();
 bool rebootRequested();     // a verified update is installed
+void certInstalled();       // a new certificate was installed: restart HTTPS shortly
 void printCredentials();    // console 'wifi'
 bool setApPass(const char* p);    // takes effect after a reboot
 bool setAdminPass(const char* p);
