@@ -76,10 +76,27 @@ bool begin(const uint8_t myMac[6], const uint8_t peerMac[6], uint8_t channel, in
 
     esp_now_peer_info_t peer = {};
     memcpy(peer.peer_addr, peerMac, 6);
-    peer.channel = channel;
+    // 0 = whatever channel the radio is on. The interior follows the home
+    // router's channel once it joins it, and the exterior hunts for it.
+    peer.channel = 0;
     peer.ifidx = WIFI_IF_STA;
     peer.encrypt = false;   // payload security is done by secure_link (AES-256-GCM)
     return esp_now_add_peer(&peer) == ESP_OK;
+}
+
+bool setChannel(uint8_t channel) {
+    if (channel < 1 || channel > 13) return false;
+    esp_wifi_set_promiscuous(true);
+    const esp_err_t e = esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+    esp_wifi_set_promiscuous(false);
+    return e == ESP_OK;
+}
+
+uint8_t channel() {
+    uint8_t ch = 0;
+    wifi_second_chan_t sec;
+    esp_wifi_get_channel(&ch, &sec);
+    return ch;
 }
 
 bool send(const uint8_t* data, size_t len) {

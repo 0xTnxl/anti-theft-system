@@ -19,6 +19,9 @@ struct Packet {
 bool begin(const uint8_t myMac[6], const uint8_t peerMac[6], uint8_t channel, int8_t maxTxQdBm,
            const char* apSsid = nullptr, const char* apPass = nullptr);
 bool send(const uint8_t* data, size_t len);
+// Exterior only (not joined to any network): move the radio to another channel.
+bool setChannel(uint8_t channel);
+uint8_t channel();   // the radio's current channel
 bool receive(Packet& out);   // non-blocking
 
 uint32_t foreignFrames();   // frames from other MACs (dropped)

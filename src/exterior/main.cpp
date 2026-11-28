@@ -7,6 +7,7 @@
 //   GPIO22 = OLED SCL and RC522 RST   -> every OLED transfer resets the RC522,
 //            so it is re-initialised before the next card poll.
 #include <Arduino.h>
+#include <Preferences.h>
 #include <SPI.h>
 #include <esp_random.h>
 #include <string.h>
@@ -90,6 +91,35 @@ void wipeCredentials() {
     mbedtls_platform_zeroize(gPin, sizeof(gPin));
     gUidLen = 0;
     gPinLen = 0;
+}
+
+// ---- channel hunt (see config_exterior.h) ----
+Preferences gPrefs;
+uint8_t gHomeCh = ESPNOW_CHANNEL;   // last channel the interior answered on
+uint8_t gTries = 0;                 // handshakes on the current channel without an answer
+
+uint32_t handshakeRetryMs() { return espnow::channel() == gHomeCh && gTries < HUNT_HOME_TRIES ? HANDSHAKE_RETRY_MS : HUNT_STEP_MS; }
+
+// Called before each handshake while there is no session.
+void huntStep() {
+    const uint8_t ch = espnow::channel();
+    if (ch == gHomeCh ? gTries < HUNT_HOME_TRIES : gTries < 1) {
+        gTries++;
+        return;
+    }
+    const uint8_t next = ch >= 13 ? 1 : ch + 1;
+    espnow::setChannel(next);
+    gTries = 1;
+    if (next == gHomeCh) Serial.printf("[link] no answer on channels 1-13, back to %u\n", next);
+}
+
+void huntFound() {
+    gTries = 0;
+    const uint8_t ch = espnow::channel();
+    if (ch == gHomeCh) return;
+    Serial.printf("[link] interior found on channel %u\n", ch);
+    gHomeCh = ch;
+    gPrefs.putUChar("ch", ch);
 }
 
 bool linkUp(uint32_t now) { return gLink.established(now) && gSessionConfirmed; }
@@ -422,7 +452,10 @@ void onMessage(const slink::RxResult& r, uint32_t now) {
         case proto::STATUS: {
             proto::Status s;
             memcpy(&s, r.payload, sizeof(s));
-            if (gAwaitConfirm) Serial.println("[link] session confirmed");
+            if (gAwaitConfirm) {
+                Serial.println("[link] session confirmed");
+                huntFound();
+            }
             gSessionConfirmed = true;
             gAwaitConfirm = false;
             if (memcmp(&s, &gStatus, sizeof(s)) != 0) {
@@ -483,7 +516,9 @@ void serviceLink(uint32_t now) {
         gAwaitConfirm = false;
     }
 
-    if (gLink.rekeyDue(now) && (!gHsSent || now - gLastHsMs >= HANDSHAKE_RETRY_MS)) {
+    const uint32_t retry = gLink.established(now) ? HANDSHAKE_RETRY_MS : handshakeRetryMs();
+    if (gLink.rekeyDue(now) && (!gHsSent || now - gLastHsMs >= retry)) {
+        if (!gLink.established(now)) huntStep();
         uint8_t hs[slink::MAX_FRAME];
         const size_t n = gLink.startHandshake(hs, sizeof(hs), now);
         if (n) espnow::send(hs, n);
@@ -758,6 +793,11 @@ void setup() {
         delay(5000);
         ESP.restart();
     }
+    gPrefs.begin("atds_ext", false);
+    gHomeCh = gPrefs.getUChar("ch", ESPNOW_CHANNEL);
+    if (gHomeCh < 1 || gHomeCh > 13) gHomeCh = ESPNOW_CHANNEL;
+    espnow::setChannel(gHomeCh);
+    Serial.printf("[link] looking for the interior on channel %u first\n", gHomeCh);
     gLink.begin(slink::Role::Exterior, ATDS_PSK, ATDS_MAC_EXTERIOR, ATDS_MAC_INTERIOR, rng);
     setUi(Ui::Linking, millis());
 }

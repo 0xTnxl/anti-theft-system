@@ -85,6 +85,11 @@ constexpr uint32_t RESULT_FAIL_MS = 2000;
 
 // ---- Link -----------------------------------------------------------------
 constexpr uint32_t HANDSHAKE_RETRY_MS = 3000;
+// The interior moves to the home router's channel when it joins the home WiFi.
+// With no session, the exterior tries its last good channel a few times, then
+// one handshake per channel 1..13 (HUNT_STEP_MS each) until the interior answers.
+constexpr uint32_t HUNT_STEP_MS = 400;
+constexpr uint8_t HUNT_HOME_TRIES = 3;
 // Session counts as confirmed only after the first STATUS from the interior.
 constexpr uint32_t SESSION_CONFIRM_MS = 3000;
 
